@@ -19,6 +19,34 @@ local N_ = _.ngettext
 local Screen = Device.screen
 local T = ffiUtil.template
 
+local source = debug.getinfo(1, "S").source or ""
+local plugin_dir = source:match("^@(.+)/[^/]+$") or "plugins/bookshelf.koplugin"
+local GridLayout = dofile(plugin_dir .. "/gridlayout.lua")
+local Icons = dofile(plugin_dir .. "/icons.lua")
+
+local FontTokens = {
+    display = "NotoSerif-Regular.ttf",
+    display_italic = "NotoSerif-Italic.ttf",
+    serif_safe = "NotoSerif-Regular.ttf",
+    sans = "NotoSans-Regular.ttf",
+    sans_bold = "NotoSans-Bold.ttf",
+}
+
+local TypeScale = {
+    book_meta_small = 9,
+    book_meta_large = 10,
+    book_title_small = 11,
+    book_title_large = 12,
+    category = 13,
+    control = 13,
+    page_title = 38,
+}
+
+local IconTokens = {
+    visual = 24,
+    tap = 40,
+}
+
 local function scale(n)
     return Screen:scaleBySize(n)
 end
@@ -38,7 +66,7 @@ local function clampPercent(value)
 end
 
 local LibraryUI = InputContainer:extend{
-    title = _("My Library"),
+    title = _("Library"),
     is_borderless = true,
     zones = nil,
     library_page = 1,
@@ -486,6 +514,22 @@ function LibraryUI:_setPressedZone(zone)
     end)
 end
 
+function LibraryUI:_px(n)
+    return GridLayout.scaleValue(n, self.shelf_scale or 1)
+end
+
+function LibraryUI:_iconSize()
+    return self:_px(IconTokens.visual)
+end
+
+function LibraryUI:_iconTapSize()
+    return self:_px(IconTokens.tap)
+end
+
+function LibraryUI:_hairline()
+    return 1
+end
+
 function LibraryUI:_paintText(bb, text, x, y, options)
     options = options or {}
     local widget = TextWidget:new{
@@ -497,12 +541,16 @@ function LibraryUI:_paintText(bb, text, x, y, options)
     }
     local size = widget:getSize()
     local paint_x = x
+    local paint_y = y
     if options.align == "right" and options.width then
         paint_x = x + options.width - size.w
     elseif options.align == "center" and options.width then
         paint_x = x + math.floor((options.width - size.w) / 2)
     end
-    widget:paintTo(bb, paint_x, y)
+    if options.valign == "center" and options.height then
+        paint_y = y + math.floor((options.height - size.h) / 2)
+    end
+    widget:paintTo(bb, paint_x, paint_y)
     widget:free()
     return size
 end
@@ -528,12 +576,12 @@ function LibraryUI:_paintTextBox(bb, text, x, y, width, options)
 end
 
 function LibraryUI:_paintLine(bb, x, y, w, color)
-    bb:paintRect(x, y, w, math.max(1, scale(1)), color or Blitbuffer.COLOR_LIGHT_GRAY)
+    bb:paintRect(x, y, w, self:_hairline(), color or Blitbuffer.COLOR_LIGHT_GRAY)
 end
 
 function LibraryUI:_paintRectBorder(bb, x, y, w, h, color)
     color = color or Blitbuffer.COLOR_LIGHT_GRAY
-    local line = math.max(1, scale(1))
+    local line = self:_hairline()
     self:_paintLine(bb, x, y, w, color)
     self:_paintLine(bb, x, y + h - line, w, color)
     bb:paintRect(x, y, line, h, color)
@@ -546,63 +594,24 @@ function LibraryUI:_paintPressedRect(bb, id, x, y, w, h)
     end
 end
 
-function LibraryUI:_paintBookGlyph(bb, x, y, w, h, selected)
-    local color = selected and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_DARK_GRAY
-    if selected then
-        bb:paintRect(x, y, w, h, color)
-        bb:paintRect(x + scale(5), y + scale(3), scale(1), h - scale(6), Blitbuffer.COLOR_WHITE)
-    else
-        self:_paintRectBorder(bb, x, y, w, h, color)
-        bb:paintRect(x + scale(5), y + scale(3), scale(1), h - scale(6), color)
-    end
+function LibraryUI:_paintIcon(bb, icon, x, y, size, selected)
+    Icons.paint(bb, icon, x, y, size, {
+        selected = selected,
+    })
 end
 
-function LibraryUI:_paintIcon(bb, icon, x, y, size, selected)
-    local color = selected and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_DARK_GRAY
-    local line = math.max(1, scale(1))
-    local center_y = y + math.floor(size / 2)
-
-    if icon == "search" then
-        local lens = math.floor(size * 0.45)
-        local lens_x = x + math.floor(size * 0.18)
-        local lens_y = y + math.floor(size * 0.16)
-        self:_paintRectBorder(bb, lens_x, lens_y, lens, lens, color)
-        bb:paintRect(lens_x + lens - line, lens_y + lens, line, scale(5), color)
-        bb:paintRect(lens_x + lens + line, lens_y + lens + scale(4), scale(7), line, color)
-    elseif icon == "filter" then
-        local left = x + math.floor(size * 0.28)
-        local top = y + math.floor(size * 0.28)
-        bb:paintRect(left, top, math.floor(size * 0.44), line, color)
-        bb:paintRect(left + scale(4), top + scale(7), math.floor(size * 0.32), line, color)
-        bb:paintRect(left + scale(8), top + scale(14), math.floor(size * 0.20), line, color)
-    elseif icon == "more" then
-        local dot = math.max(scale(2), math.floor(size * 0.09))
-        local gap = scale(5)
-        local start = x + math.floor((size - dot * 3 - gap * 2) / 2)
-        for i = 0, 2 do
-            bb:paintRect(start + i * (dot + gap), center_y - math.floor(dot / 2), dot, dot, color)
-        end
-    elseif icon == "dictionary" then
-        self:_paintRectBorder(bb, x + scale(7), y + scale(6), size - scale(14), size - scale(12), color)
-        bb:paintRect(x + math.floor(size / 2), y + scale(8), line, size - scale(16), color)
-    elseif icon == "add" then
-        self:_paintRectBorder(bb, x + scale(7), y + scale(7), size - scale(14), size - scale(14), color)
-        bb:paintRect(x + math.floor(size / 2), y + scale(12), line, size - scale(24), color)
-        bb:paintRect(x + scale(12), y + math.floor(size / 2), size - scale(24), line, color)
-    elseif icon == "files" then
-        local folder_x = x + scale(6)
-        local folder_y = y + scale(10)
-        bb:paintRect(folder_x, folder_y, scale(10), line, color)
-        bb:paintRect(folder_x + scale(9), folder_y + scale(3), size - scale(20), line, color)
-        self:_paintRectBorder(bb, folder_x, folder_y + scale(4), size - scale(12), size - scale(18), color)
-    else
-        self:_paintBookGlyph(bb, x + scale(8), y + scale(5), size - scale(16), size - scale(10), selected)
-    end
+function LibraryUI:_paintCenteredIcon(bb, icon, x, y, w, h, selected)
+    local icon_size = self:_iconSize()
+    local icon_x = x + math.floor((w - icon_size) / 2)
+    local icon_y = y + math.floor((h - icon_size) / 2)
+    self:_paintIcon(bb, icon, icon_x, icon_y, icon_size, selected)
+    return icon_size
 end
 
 function LibraryUI:_paintStatusBar(bb, x, y, w)
     local time_text = os.date("%I:%M %p"):gsub("^0", "")
     self:_paintText(bb, time_text, x, y, {
+        face = FontTokens.sans,
         size = 13,
         max_width = math.floor(w * 0.4),
     })
@@ -617,78 +626,117 @@ function LibraryUI:_paintStatusBar(bb, x, y, w)
     if battery and battery > 0 then
         local battery_text = string.format("%d%%", battery)
         self:_paintText(bb, battery_text, x, y, {
+            face = FontTokens.sans,
             size = 13,
             align = "right",
-            width = w - scale(30),
-            max_width = scale(64),
+            width = w - self:_px(30),
+            max_width = self:_px(64),
         })
-        local icon_x = x + w - scale(26)
-        local icon_y = y + scale(5)
-        self:_paintRectBorder(bb, icon_x, icon_y, scale(20), scale(10), Blitbuffer.COLOR_DARK_GRAY)
-        bb:paintRect(icon_x + scale(21), icon_y + scale(3), scale(2), scale(4), Blitbuffer.COLOR_DARK_GRAY)
+        local icon_x = x + w - self:_px(26)
+        local icon_y = y + self:_px(5)
+        self:_paintRectBorder(bb, icon_x, icon_y, self:_px(20), self:_px(10), Blitbuffer.COLOR_DARK_GRAY)
+        bb:paintRect(icon_x + self:_px(21), icon_y + self:_px(3), self:_px(2), self:_px(4), Blitbuffer.COLOR_DARK_GRAY)
     end
 end
 
-function LibraryUI:_paintHeaderAction(bb, id, icon, x, y, size, callback)
-    self:_paintPressedRect(bb, id, x, y, size, size)
-    self:_paintIcon(bb, icon, x, y, size, false)
-    self:_zone(id, Geom:new{x = x, y = y, w = size, h = size}, callback)
+function LibraryUI:_paintHeaderAction(bb, id, icon, x, y, tap_size, callback)
+    self:_paintPressedRect(bb, id, x, y, tap_size, tap_size)
+    self:_paintCenteredIcon(bb, icon, x, y, tap_size, tap_size, false)
+    self:_zone(id, Geom:new{x = x, y = y, w = tap_size, h = tap_size}, callback)
 end
 
 function LibraryUI:_paintHeader(bb, x, y, w)
     self:_paintText(bb, self.title, x, y, {
-        face = "NotoSerif-Regular.ttf",
-        size = 38,
-        max_width = w - scale(190),
+        face = FontTokens.display_italic,
+        size = TypeScale.page_title,
+        max_width = w - self:_px(164),
     })
-    self:_paintLine(bb, x, y + scale(56), scale(30), Blitbuffer.COLOR_BLACK)
+    self:_paintLine(bb, x, y + self:_px(54), self:_px(24), Blitbuffer.COLOR_BLACK)
 
-    local action = scale(36)
-    local gap = scale(16)
+    local action = self:_iconTapSize()
+    local gap = self:_px(10)
     local right = x + w - action
-    self:_paintHeaderAction(bb, "more", "more", right, y + scale(9), action, function()
+    self:_paintHeaderAction(bb, "more", "more", right, y + self:_px(4), action, function()
         self:_showMore()
     end)
     right = right - action - gap
-    self:_paintHeaderAction(bb, "filter", "filter", right, y + scale(9), action, function()
+    self:_paintHeaderAction(bb, "filter", "filter", right, y + self:_px(4), action, function()
         self:_showFilter()
     end)
     right = right - action - gap
-    self:_paintHeaderAction(bb, "search", "search", right, y + scale(9), action, function()
+    self:_paintHeaderAction(bb, "search", "search", right, y + self:_px(4), action, function()
         self:_showDictionaryLookup()
     end)
 end
 
-function LibraryUI:_paintSectionHeader(bb, text, count_text, action_text, x, y, w, id, callback)
-    self:_paintPressedRect(bb, id, x, y - scale(6), w, scale(36))
-    local title_size = self:_paintText(bb, text, x, y, {
-        size = 17,
-        bold = true,
+function LibraryUI:_paintCategoryControl(bb, control, x, y)
+    local gap = self:_px(4)
+    local width = control.width or self:_px(112)
+    local label_size = self:_paintText(bb, control.label, x, y, {
+        face = FontTokens.sans,
+        size = TypeScale.category,
+        max_width = math.floor(width * 0.46),
+    })
+    self:_paintText(bb, control.value, x + label_size.w + gap, y, {
+        face = FontTokens.sans_bold,
+        size = TypeScale.category,
+        max_width = width - label_size.w - gap,
+    })
+end
+
+function LibraryUI:_paintCategoryHeader(bb, opts)
+    opts = opts or {}
+    local x = opts.x
+    local y = opts.y
+    local w = opts.w
+    local id = opts.id
+    local callback = opts.callback
+
+    self:_paintPressedRect(bb, id, x, y - self:_px(6), w, self:_px(34))
+    local title_size = self:_paintText(bb, opts.title, x, y, {
+        face = FontTokens.sans_bold,
+        size = TypeScale.category,
         max_width = math.floor(w * 0.38),
     })
-    if count_text and count_text ~= "" then
-        self:_paintText(bb, count_text, x + title_size.w + scale(16), y + scale(1), {
-            size = 16,
+    if opts.count_text and opts.count_text ~= "" then
+        self:_paintText(bb, opts.count_text, x + title_size.w + self:_px(12), y, {
+            face = FontTokens.sans,
+            size = TypeScale.category,
             color = Blitbuffer.COLOR_DARK_GRAY,
             max_width = math.floor(w * 0.24),
         })
     end
-    if action_text then
-        self:_paintText(bb, action_text, x, y, {
-            size = 16,
-            align = "right",
-            width = w,
-            max_width = math.floor(w * 0.42),
-        })
-    else
-        self:_paintText(bb, ">", x + title_size.w + scale(14), y + scale(1), {
-            size = 16,
-            max_width = scale(20),
-        })
+
+    local right = x + w
+    for i = #(opts.controls or {}), 1, -1 do
+        local control = opts.controls[i]
+        local control_w = control.width or self:_px(112)
+        self:_paintCategoryControl(bb, control, right - control_w, y)
+        right = right - control_w - self:_px(24)
+    end
+
+    if opts.chevron then
+        local icon_size = self:_iconSize()
+        self:_paintIcon(bb, "chevron_right", x + title_size.w + self:_px(6),
+            y + math.floor((title_size.h - icon_size) / 2), icon_size, false)
     end
     if id and callback then
-        self:_zone(id, Geom:new{x = x, y = y - scale(6), w = w, h = scale(36)}, callback)
+        self:_zone(id, Geom:new{x = x, y = y - self:_px(6), w = w, h = self:_px(34)}, callback)
     end
+end
+
+function LibraryUI:_paintSectionHeader(bb, text, count_text, action_text, x, y, w, id, callback)
+    self:_paintCategoryHeader(bb, {
+        title = text,
+        count_text = count_text,
+        controls = action_text and {{ label = "", value = action_text, width = math.floor(w * 0.42) }} or nil,
+        chevron = not action_text,
+        x = x,
+        y = y,
+        w = w,
+        id = id,
+        callback = callback,
+    })
 end
 
 function LibraryUI:_coverTitleLines(title, max_lines)
@@ -727,44 +775,66 @@ function LibraryUI:_coverTitleLines(title, max_lines)
     return lines
 end
 
-function LibraryUI:_paintBookCover(bb, entry, x, y, w, h, compact)
+function LibraryUI:_entryHasCoverArtwork(entry)
+    if type(entry) ~= "table" then
+        return false
+    end
+    return entry.has_cover == true
+        or entry.cover ~= nil
+        or entry.cover_image ~= nil
+        or entry.cover_path ~= nil
+        or entry.thumbnail ~= nil
+        or entry.thumbnail_path ~= nil
+end
+
+function LibraryUI:_coverFillColor(entry)
+    if self:_entryHasCoverArtwork(entry) then
+        return Blitbuffer.COLOR_WHITE
+    elseif entry and entry.current then
+        return Blitbuffer.COLOR_GRAY_D or Blitbuffer.COLOR_GRAY_E
+    end
+    return Blitbuffer.COLOR_GRAY_E
+end
+
+function LibraryUI:_paintBookCover(bb, entry, x, y, w, h, kind)
     self:_paintRectBorder(bb, x, y, w, h, Blitbuffer.COLOR_LIGHT_GRAY)
-    local inset = math.max(1, scale(1))
-    local fill = entry and entry.current and Blitbuffer.COLOR_GRAY_E or Blitbuffer.COLOR_WHITE
+    local inset = self:_hairline()
+    local fill = self:_coverFillColor(entry)
     bb:paintRect(x + inset, y + inset, w - inset * 2, h - inset * 2, fill)
 
     local title = self:_entryTitle(entry) or _("Untitled")
-    local lines = self:_coverTitleLines(title, compact and 2 or 3)
-    local font_size = compact and 11 or 16
-    if #title > 28 then
-        font_size = font_size - 1
-    end
-    local line_step = scale(compact and 15 or 22)
+    local lines = self:_coverTitleLines(title, 2)
+    local compact = kind == "small"
+    local font_size = compact and 11 or 14
+    local line_step = self:_px(compact and 14 or 19)
     local title_block_h = #lines * line_step
-    local title_y = y + math.floor((h - title_block_h) / 2) - (compact and scale(4) or scale(12))
+    local title_y = y + math.floor((h - title_block_h) / 2) - self:_px(compact and 3 or 8)
     for i, line in ipairs(lines) do
-        self:_paintText(bb, line, x + scale(8), title_y + (i - 1) * line_step, {
-            face = "NotoSerif-Bold.ttf",
+        self:_paintText(bb, line, x + self:_px(8), title_y + (i - 1) * line_step, {
+            face = FontTokens.sans_bold,
             size = font_size,
             align = "center",
-            width = w - scale(16),
-            max_width = w - scale(16),
+            width = w - self:_px(16),
+            max_width = w - self:_px(16),
         })
     end
 
-    local author = self:_entryAuthor(entry)
-    if author and not compact then
-        self:_paintTextBox(bb, author, x + scale(12), y + h - scale(40), w - scale(24), {
-            size = 12,
+    if compact then
+        local motif_y = y + h - self:_px(24)
+        self:_paintLine(bb, x + self:_px(16), motif_y, w - self:_px(32), Blitbuffer.COLOR_LIGHT_GRAY)
+        self:_paintLine(bb, x + self:_px(24), motif_y + self:_px(7), w - self:_px(48), Blitbuffer.COLOR_LIGHT_GRAY)
+    else
+        local author = self:_entryAuthor(entry) or _("Document")
+        self:_paintText(bb, author, x + self:_px(12), y + h - self:_px(34), {
+            face = FontTokens.sans,
+            size = 10,
+            color = Blitbuffer.COLOR_DARK_GRAY,
             align = "center",
-            height = scale(28),
-            line_height = 0.05,
+            width = w - self:_px(24),
+            max_width = w - self:_px(24),
         })
-    end
-
-    if not compact then
         local rule_w = math.floor(w * 0.34)
-        self:_paintLine(bb, x + math.floor((w - rule_w) / 2), y + scale(20), rule_w, Blitbuffer.COLOR_LIGHT_GRAY)
+        self:_paintLine(bb, x + math.floor((w - rule_w) / 2), y + self:_px(18), rule_w, Blitbuffer.COLOR_LIGHT_GRAY)
     end
 end
 
@@ -789,206 +859,274 @@ function LibraryUI:_paintProgressLine(bb, x, y, w, percentage)
     bb:paintRect(x, y, math.floor(w * percentage), bar_h, Blitbuffer.COLOR_BLACK)
 end
 
-function LibraryUI:_paintContinueCard(bb, x, y, w, h)
-    local entry = self:_continueEntry()
-    self:_paintSectionHeader(bb, _("Continue reading"), nil, nil, x, y, w, "continue_header", function()
-        self:_continue()
-    end)
-
-    local card_y = y + scale(36)
-    local card_h = h - scale(36)
-    self:_paintPressedRect(bb, "continue", x, card_y, w, card_h)
-    self:_paintRectBorder(bb, x, card_y, w, card_h, Blitbuffer.COLOR_LIGHT_GRAY)
-
-    local cover_w = math.floor(card_h * 0.62)
-    self:_paintBookCover(bb, entry, x, card_y, cover_w, card_h, true)
-
-    local text_x = x + cover_w + scale(28)
-    local text_w = w - cover_w - scale(68)
-    self:_paintTextBox(bb, self:_entryTitle(entry) or _("No recent book"), text_x, card_y + scale(30), text_w, {
-        face = "NotoSerif-Bold.ttf",
-        size = 22,
-        height = scale(44),
-        line_height = 0.08,
-    })
-    local author = self:_entryAuthor(entry)
-    if author then
-        self:_paintText(bb, author, text_x, card_y + scale(66), {
-            size = 15,
-            max_width = text_w,
-        })
-    end
-
-    local progress_y = card_y + card_h - scale(26)
-    self:_paintText(bb, entry and self:_progressSummary(entry) or "", text_x, progress_y - scale(28), {
-        size = 15,
-        color = Blitbuffer.COLOR_DARK_GRAY,
-        max_width = text_w,
-    })
-    self:_paintProgressLine(bb, text_x, progress_y, text_w - scale(38), entry and entry.percent_finished or 0)
-    self:_paintIcon(bb, "more", x + w - scale(48), card_y + scale(14), scale(32), false)
-    if entry then
-        self:_zone("continue", Geom:new{x = x, y = card_y, w = w, h = card_h}, function()
-            self:_continue()
-        end)
-    end
-end
-
-function LibraryUI:_paintBookTile(bb, entry, x, y, w, h, id, options)
+function LibraryUI:_paintBookCard(bb, entry, slot, id, options)
     options = options or {}
-    local compact_tile = h < scale(180)
-    local title_h = compact_tile and scale(28) or scale(38)
-    local author_h = compact_tile and 0 or scale(28)
-    local state_h = options.show_state and scale(22) or 0
-    local detail_h = title_h + author_h + state_h + scale(14)
-    local cover_min_h = compact_tile and scale(50) or scale(70)
-    local cover_h = options.cover_h or math.min(math.floor(w * 1.43), math.max(cover_min_h, h - detail_h))
-    local title_y = y + cover_h + scale(8)
+    local kind = options.kind or "small"
+    local metrics = GridLayout.metrics(kind, self.shelf_scale)
     local title = self:_entryTitle(entry) or _("Untitled")
     local author = self:_entryAuthor(entry) or ""
 
-    self:_paintPressedRect(bb, id, x, y, w, h)
-    self:_paintBookCover(bb, entry, x, y, w, cover_h, w < scale(130))
-    self:_paintTextBox(bb, title, x, title_y, w, {
-        size = compact_tile and 13 or 15,
-        bold = true,
-        height = title_h,
+    self:_paintPressedRect(bb, id, slot.x, slot.y, slot.w, slot.h)
+    self:_paintBookCover(bb, entry, slot.cover.x, slot.cover.y, slot.cover.w, slot.cover.h, kind)
+    self:_paintTextBox(bb, title, slot.title.x, slot.title.y, slot.title.w, {
+        face = FontTokens.sans_bold,
+        size = metrics.title_size,
+        height = slot.title.h,
         line_height = 0.05,
     })
-    if author ~= "" and not compact_tile then
-        self:_paintTextBox(bb, author, x, title_y + title_h, w, {
-            size = 12,
-            height = author_h,
-            line_height = 0.05,
-        })
+    if author == "" and options.show_state then
+        author = entry and entry.status == "reading" and _("Reading") or _("New")
     end
-    if options.show_state then
-        self:_paintText(bb, entry and entry.status == "reading" and _("Reading") or _("New"), x, y + h - scale(22), {
-            size = 12,
-            color = Blitbuffer.COLOR_DARK_GRAY,
-            max_width = math.floor(w * 0.65),
-        })
-        self:_paintIcon(bb, "more", x + w - scale(30), y + h - scale(28), scale(26), false)
-    end
+    self:_paintTextBox(bb, author, slot.metadata.x, slot.metadata.y, slot.metadata.w, {
+        face = FontTokens.sans,
+        size = metrics.metadata_size,
+        color = Blitbuffer.COLOR_DARK_GRAY,
+        height = slot.metadata.h,
+        line_height = 0.02,
+    })
+
+    self:_paintCenteredIcon(bb, "more", slot.menu.x, slot.menu.y, slot.menu.w, slot.menu.h, false)
     if entry then
-        self:_zone(id, Geom:new{x = x, y = y, w = w, h = h}, function()
+        self:_zone(id, Geom:new{x = slot.x, y = slot.y, w = slot.w, h = slot.h}, function()
             self:_openEntry(entry)
+        end)
+        self:_zone(id .. "_menu", Geom:new{x = slot.menu.x - self:_px(8), y = slot.menu.y - self:_px(8),
+            w = slot.menu.w + self:_px(16), h = slot.menu.h + self:_px(16)}, function()
+            self:_showMore()
         end)
     end
 end
 
 function LibraryUI:_paintEmptyShelf(bb, x, y, w, centered)
-    local title = _("No books downloaded")
-    local body = _("Add books from your library server, then they will appear here for offline reading.")
+    local title = centered and _("Your library is empty") or _("No books yet")
+    local body = centered
+        and _("Books, PDFs, and documents you add will appear here.")
+        or _("Books you add will appear here.")
     self:_paintText(bb, title, x, y, {
-        face = "NotoSerif-Regular.ttf",
-        size = 24,
+        face = centered and FontTokens.display or FontTokens.sans_bold,
+        size = centered and 28 or 14,
         align = centered and "center" or nil,
         width = centered and w or nil,
         max_width = w,
     })
-    self:_paintTextBox(bb, body, x, y + scale(42), w, {
-        size = 16,
+    self:_paintTextBox(bb, body, x, y + self:_px(centered and 42 or 32), w, {
+        face = FontTokens.sans,
+        size = centered and 14 or 12,
         color = Blitbuffer.COLOR_DARK_GRAY,
         align = centered and "center" or "left",
-        height = scale(52),
+        height = self:_px(centered and 52 or 36),
         line_height = 0.12,
     })
 end
 
 function LibraryUI:_paintEmptyHome(bb, x, y, w)
     self:_paintEmptyShelf(bb, x, y, w, true)
-    local action_y = y + scale(124)
+    local action_y = y + self:_px(124)
     local item_w = math.floor(w / 2)
     self:_paintText(bb, _("Add Books"), x, action_y, {
+        face = FontTokens.sans_bold,
         size = 17,
-        bold = true,
         align = "center",
         width = item_w,
         max_width = item_w,
     })
     self:_paintText(bb, _("Dictionary"), x + item_w, action_y, {
+        face = FontTokens.sans,
         size = 17,
         align = "center",
         width = item_w,
         max_width = item_w,
     })
-    self:_zone("empty_add", Geom:new{x = x, y = action_y - scale(18), w = item_w, h = scale(56)}, function()
+    self:_zone("empty_add", Geom:new{x = x, y = action_y - self:_px(18), w = item_w, h = self:_px(56)}, function()
         self:_addBooks()
     end)
-    self:_zone("empty_dictionary", Geom:new{x = x + item_w, y = action_y - scale(18), w = item_w, h = scale(56)}, function()
+    self:_zone("empty_dictionary", Geom:new{x = x + item_w, y = action_y - self:_px(18), w = item_w, h = self:_px(56)}, function()
         self:_showDictionaryLookup()
     end)
 end
 
-function LibraryUI:_paintRecentlyAdded(bb, x, y, w, h)
-    local entries = self:_recentlyAddedEntries()
-    self:_paintSectionHeader(bb, _("Recently added"), nil, nil, x, y, w, "recently_added", function()
-        self:_addBooks()
+function LibraryUI:_paintEmptyShelfPlaceholder(bb, x, y, w, h)
+    local line = self:_hairline()
+    local dash = self:_px(8)
+    local gap = self:_px(6)
+    local color = Blitbuffer.COLOR_LIGHT_GRAY
+    for cursor = x, x + w - dash, dash + gap do
+        bb:paintRect(cursor, y, math.min(dash, x + w - cursor), line, color)
+        bb:paintRect(cursor, y + h - line, math.min(dash, x + w - cursor), line, color)
+    end
+    for cursor = y, y + h - dash, dash + gap do
+        bb:paintRect(x, cursor, line, math.min(dash, y + h - cursor), color)
+        bb:paintRect(x + w - line, cursor, line, math.min(dash, y + h - cursor), color)
+    end
+    self:_paintEmptyShelf(bb, x + self:_px(16), y + math.floor((h - self:_px(48)) / 2), w - self:_px(32), true)
+end
+
+function LibraryUI:_paintContinueEmptyState(bb, x, y, w)
+    local h = self:_px(116)
+    self:_paintRectBorder(bb, x, y, w, h, Blitbuffer.COLOR_LIGHT_GRAY)
+
+    local icon_size = self:_iconSize()
+    local icon_x = x + math.floor((w - icon_size) / 2)
+    local icon_y = y + self:_px(22)
+    self:_paintIcon(bb, "open_book", icon_x, icon_y, icon_size, false)
+
+    self:_paintText(bb, _("Nothing in progress yet"), x + self:_px(16), icon_y + icon_size + self:_px(10), {
+        face = FontTokens.serif_safe,
+        size = 13,
+        align = "center",
+        width = w - self:_px(32),
+        max_width = w - self:_px(32),
+    })
+    self:_paintText(bb, _("Start reading a book and it will appear here."), x + self:_px(16), icon_y + icon_size + self:_px(34), {
+        face = FontTokens.sans,
+        size = 9,
+        color = Blitbuffer.COLOR_DARK_GRAY,
+        align = "center",
+        width = w - self:_px(32),
+        max_width = w - self:_px(32),
+    })
+
+    return h
+end
+
+function LibraryUI:_paintGridCards(bb, kind, entries, x, y, w, rows, id_prefix, options)
+    local grid = GridLayout.grid(kind, {
+        x = x,
+        y = y,
+        w = w,
+        rows = rows,
+        item_count = #entries,
+        scale = self.shelf_scale,
+    })
+    for i, slot in ipairs(grid.slots) do
+        self:_paintBookCard(bb, entries[i], slot, id_prefix .. tostring(i), {
+            kind = kind,
+            show_state = options and options.show_state,
+        })
+    end
+    return grid
+end
+
+function LibraryUI:_sectionHeaderHeight()
+    return self:_px(30)
+end
+
+function LibraryUI:_sectionGap()
+    return self:_px(12)
+end
+
+function LibraryUI:_paintContinueShelf(bb, x, y, w)
+    local entry = self:_continueEntry()
+    local entries = entry and { entry } or {}
+    local metrics = GridLayout.metrics("large", self.shelf_scale)
+    local header_x = x + metrics.outer
+    local header_w = w - metrics.outer * 2
+    self:_paintSectionHeader(bb, _("Continue reading"), nil, nil, header_x, y, header_w, "continue_header", function()
+        self:_continue()
     end)
+
+    local grid_y = y + self:_sectionHeaderHeight() + self:_sectionGap()
     if #entries == 0 then
-        self:_paintEmptyShelf(bb, x, y + scale(48), w)
-        return
+        local empty_h = self:_paintContinueEmptyState(bb, x + metrics.outer, grid_y, header_w)
+        return self:_sectionHeaderHeight() + self:_sectionGap() + empty_h
     end
 
-    local cols = math.min(5, math.max(2, math.floor(w / scale(122))))
-    local gap = scale(16)
-    local tile_w = math.floor((w - gap * (cols - 1)) / cols)
-    local tile_h = h - scale(44)
-    local tile_y = y + scale(44)
-    for i = 1, math.min(cols, #entries) do
-        self:_paintBookTile(bb, entries[i], x + (i - 1) * (tile_w + gap), tile_y, tile_w, tile_h,
-            "recent_" .. tostring(i), { show_state = true })
+    local grid = self:_paintGridCards(bb, "large", entries, x, grid_y, w, 1, "continue_", {
+        show_state = false,
+    })
+    return self:_sectionHeaderHeight() + self:_sectionGap() + grid.metrics.card_h
+end
+
+function LibraryUI:_paintRecentlyAdded(bb, x, y, w)
+    local entries = self:_recentlyAddedEntries()
+    local metrics = GridLayout.metrics("large", self.shelf_scale)
+    local header_x = x + metrics.outer
+    local header_w = w - metrics.outer * 2
+    self:_paintSectionHeader(bb, _("Recently added"), nil, nil, header_x, y, header_w, "recently_added", function()
+        self:_addBooks()
+    end)
+    local grid_y = y + self:_sectionHeaderHeight() + self:_sectionGap()
+    if #entries == 0 then
+        self:_paintEmptyShelfPlaceholder(bb, x + metrics.outer, grid_y, metrics.card_w * 2 + metrics.gutter, metrics.card_h)
+        return self:_sectionHeaderHeight() + self:_sectionGap() + metrics.card_h
     end
+
+    local grid = self:_paintGridCards(bb, "large", entries, x, grid_y, w, 1, "recent_", {
+        show_state = true,
+    })
+    return self:_sectionHeaderHeight() + self:_sectionGap() + grid.metrics.card_h
 end
 
 function LibraryUI:_allBookColumns(w)
-    return math.min(5, math.max(2, math.floor(w / scale(128))))
+    return GridLayout.columns("small", w, self.shelf_scale)
 end
 
 function LibraryUI:_paintAllBooks(bb, x, y, w, h)
     local entries = self:_libraryEntries()
     local count = #entries
     local count_text = T(N_("%1 item", "%1 items", count), count)
-    self:_paintLine(bb, self.dimen.x, y - scale(20), self.dimen.w, Blitbuffer.COLOR_LIGHT_GRAY)
-    self:_paintPressedRect(bb, "all_books_header", x, y - scale(6), w, scale(36))
-    local title_size = self:_paintText(bb, _("All books"), x, y, {
-        size = 17,
-        bold = true,
-        max_width = math.floor(w * 0.32),
+    local metrics = GridLayout.metrics("small", self.shelf_scale)
+    local header_x = x + metrics.outer
+    local header_w = w - metrics.outer * 2
+    self:_paintLine(bb, self.dimen.x, y - self:_px(18), self.dimen.w, Blitbuffer.COLOR_LIGHT_GRAY)
+    self:_paintCategoryHeader(bb, {
+        title = _("All books"),
+        count_text = count_text,
+        controls = {
+            {
+                label = _("Sort:"),
+                value = _("Recent"),
+                width = self:_px(112),
+            },
+        },
+        x = header_x,
+        y = y,
+        w = header_w,
+        id = "all_books_header",
+        callback = function()
+            self:_showFilter()
+        end,
     })
-    self:_paintText(bb, count_text, x + title_size.w + scale(16), y + scale(1), {
-        size = 16,
-        color = Blitbuffer.COLOR_DARK_GRAY,
-        max_width = math.floor(w * 0.2),
-    })
-    self:_paintText(bb, _("View: Grid"), x + w - scale(98), y + scale(1), {
-        size = 15,
-        max_width = scale(98),
-    })
-    self:_paintText(bb, _("Sort: Recent"), x + w - scale(228), y + scale(1), {
-        size = 15,
-        max_width = scale(118),
-    })
-    self:_zone("all_books_header", Geom:new{x = x, y = y - scale(6), w = w, h = scale(36)}, function()
-        self:_showFilter()
-    end)
 
-    if count == 0 then
-        self:_paintEmptyShelf(bb, x, y + scale(58), w)
+    local grid_y = y + self:_sectionHeaderHeight() + self:_sectionGap()
+    local grid_h = h - self:_sectionHeaderHeight() - self:_sectionGap()
+    local rows = GridLayout.rowsForHeight("small", grid_h, self.shelf_scale)
+    local cols = self:_allBookColumns(w)
+    if rows == 0 then
+        self.all_books_page_size = 1
         return
     end
 
-    local cols = self:_allBookColumns(w)
-    local gap = scale(16)
-    local tile_w = math.floor((w - gap * (cols - 1)) / cols)
-    local tile_h = h - scale(56)
-    local first = (self.library_page - 1) * cols + 1
-    local max_page = math.max(1, math.ceil(count / cols))
+    local page_size = math.max(1, cols * rows)
+    self.all_books_page_size = page_size
+
+    if count == 0 then
+        self:_paintEmptyShelfPlaceholder(bb, x + metrics.outer, grid_y, metrics.card_w * 2 + metrics.gutter, metrics.card_h)
+        return
+    end
+
+    local first = (self.library_page - 1) * page_size + 1
+    local max_page = math.max(1, math.ceil(count / page_size))
     self.library_page = math.max(1, math.min(self.library_page, max_page))
-    for i = 0, math.min(cols, count - first + 1) - 1 do
-        self:_paintBookTile(bb, entries[first + i], x + i * (tile_w + gap), y + scale(58), tile_w, tile_h,
-            "book_" .. tostring(first + i))
+    first = (self.library_page - 1) * page_size + 1
+
+    local page_entries = {}
+    for i = 0, math.min(page_size, count - first + 1) - 1 do
+        page_entries[#page_entries + 1] = entries[first + i]
+    end
+    local grid = GridLayout.grid("small", {
+        x = x,
+        y = grid_y,
+        w = w,
+        rows = math.max(1, rows),
+        columns = cols,
+        item_count = #page_entries,
+        scale = self.shelf_scale,
+    })
+    for i, slot in ipairs(grid.slots) do
+        self:_paintBookCard(bb, page_entries[i], slot, "book_" .. tostring(first + i - 1), {
+            kind = "small",
+        })
     end
 end
 
@@ -1000,22 +1138,28 @@ function LibraryUI:_paintBottomNav(bb, x, y, w, h)
         { id = "nav_add", text = _("Add Books"), icon = "add", callback = function() self:_addBooks() end },
         { id = "nav_files", text = _("Files"), icon = "files", callback = function() self:_showFiles() end },
     }
-    local item_w = math.floor(w / #labels)
+    local nav = GridLayout.bottomTabs{
+        x = x,
+        y = y,
+        w = w,
+        count = #labels,
+        scale = self.shelf_scale,
+    }
     for i, item in ipairs(labels) do
-        local item_x = x + (i - 1) * item_w
-        self:_paintPressedRect(bb, item.id, item_x, y + scale(10), item_w, h - scale(10))
-        if item.selected then
-            bb:paintRect(item_x + math.floor((item_w - scale(28)) / 2), y + scale(6), scale(28), math.max(1, scale(2)), Blitbuffer.COLOR_BLACK)
-        end
-        self:_paintIcon(bb, item.icon, item_x + math.floor((item_w - scale(26)) / 2), y + scale(14), scale(26), item.selected)
-        self:_paintText(bb, item.text, item_x, y + scale(38), {
-            size = 13,
-            bold = item.selected,
+        local slot = nav.slots[i]
+        self:_paintPressedRect(bb, item.id, slot.tap.x, slot.tap.y, slot.tap.w, slot.tap.h)
+        self:_paintIcon(bb, item.icon, slot.icon.x, slot.icon.y, slot.icon.w, item.selected)
+        self:_paintText(bb, item.text, slot.label.x, slot.label.y, {
+            face = item.selected and FontTokens.sans_bold or FontTokens.sans,
+            size = 11,
+            color = item.selected and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_DARK_GRAY,
             align = "center",
-            width = item_w,
-            max_width = item_w - scale(10),
+            width = slot.label.w,
+            height = slot.label.h,
+            valign = "center",
+            max_width = slot.label.w - self:_px(4),
         })
-        self:_zone(item.id, Geom:new{x = item_x, y = y, w = item_w, h = h}, item.callback)
+        self:_zone(item.id, Geom:new{x = slot.tap.x, y = slot.tap.y, w = slot.tap.w, h = slot.tap.h}, item.callback)
     end
 end
 
@@ -1028,33 +1172,32 @@ function LibraryUI:paintTo(bb, x, y)
 
     local w = self.dimen.w
     local h = self.dimen.h
-    local margin = scale(32)
+    self.shelf_scale = GridLayout.scaleForViewport(w, h)
+    local margin = GridLayout.metrics("small", self.shelf_scale).outer
     local inner_w = w - 2 * margin
-    local nav_h = scale(56)
-    local cursor_y = y + scale(24)
+    local nav_h = GridLayout.bottomTabs{w = w, count = 4, scale = self.shelf_scale}.h
+    local cursor_y = y + self:_px(16)
     local has_books = #self:_libraryEntries() > 0
     bb:paintRect(x, y, w, h, Blitbuffer.COLOR_WHITE)
 
     self:_paintStatusBar(bb, x + margin, cursor_y, inner_w)
-    cursor_y = cursor_y + scale(44)
+    cursor_y = cursor_y + self:_px(34)
 
     self:_paintHeader(bb, x + margin, cursor_y, inner_w)
-    cursor_y = cursor_y + scale(76)
+    cursor_y = cursor_y + self:_px(72)
 
     if not has_books then
-        self:_paintEmptyHome(bb, x + margin, cursor_y + scale(64), inner_w)
+        self:_paintEmptyHome(bb, x + margin, cursor_y + self:_px(64), inner_w)
         self:_paintBottomNav(bb, x, h - nav_h, w, nav_h)
         return
     end
 
-    self:_paintContinueCard(bb, x + margin, cursor_y, inner_w, scale(172))
-    cursor_y = cursor_y + scale(204)
+    cursor_y = cursor_y + self:_paintContinueShelf(bb, x, cursor_y, w) + self:_px(28)
 
-    self:_paintRecentlyAdded(bb, x + margin, cursor_y, inner_w, scale(204))
-    cursor_y = cursor_y + scale(228)
+    cursor_y = cursor_y + self:_paintRecentlyAdded(bb, x, cursor_y, w) + self:_px(32)
 
-    local all_h = h - cursor_y - nav_h - scale(14)
-    self:_paintAllBooks(bb, x + margin, cursor_y, inner_w, all_h)
+    local all_h = h - cursor_y - nav_h - self:_px(14)
+    self:_paintAllBooks(bb, x, cursor_y, w, all_h)
 
     self:_paintBottomNav(bb, x, h - nav_h, w, nav_h)
 end
@@ -1070,7 +1213,7 @@ end
 
 function LibraryUI:onSwipe(arg, ges)
     local entries = self:_libraryEntries()
-    local visible_slots = self:_allBookColumns(self.dimen.w - 2 * scale(44))
+    local visible_slots = self.all_books_page_size or self:_allBookColumns(self.dimen.w)
     if #entries <= visible_slots then
         return true
     end
