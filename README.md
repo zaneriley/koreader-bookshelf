@@ -27,6 +27,15 @@ Status: working prototype. This is not an official KOReader project. I'm buildin
 - `tools/`: measurement tooling for repeatable performance notes.
 - `doc/`: manual QA, emulator notes, and evidence format.
 
+## Design and QA Docs
+
+- `doc/Bookshelf_design_spec.md`: library surface layout, typography, icon, and
+  spacing spec.
+- `doc/Reading_preset_visual_qa.md`: reading preset glossary, visual fixture
+  matrix, and screenshot review schema.
+- `doc/Bookshelf_prototype_measurement.md`: emulator setup, manual QA notes, and
+  performance evidence format.
+
 ## Local Development
 
 This repo is developed against a KOReader checkout. The Lua code runs inside KOReader's own environment; host-global Lua is not required.
@@ -47,9 +56,12 @@ The current verification target is:
 
 - Lua loads for the plugin and integration launcher.
 - Busted specs for provider and Home routing behavior.
-- Python unit tests for `tools/bookshelf_measure.py`.
+- Python unit tests for `tools/bookshelf_measure.py` and
+  `tools/reading_preset_qa.py`.
 - Manual visual QA in the SDL/noVNC emulator at reMarkable dimensions.
 - Performance samples recorded through `tools/bookshelf_measure.py`.
+- Promoted reading-preset capture records validated through
+  `tools/reading_preset_qa.py`.
 
 Measurement helper examples:
 
@@ -62,6 +74,14 @@ python3 tools/bookshelf_measure.py repeat \
   --cache-state warm \
   --library-size 250
 python3 tools/bookshelf_measure.py summarize
+```
+
+Reading-preset capture validation:
+
+```sh
+python3 tools/reading_preset_qa.py validate \
+  --captures doc/captures \
+  --require-captures
 ```
 
 ## License
