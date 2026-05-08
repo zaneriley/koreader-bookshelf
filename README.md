@@ -5,7 +5,10 @@ and other large e-ink devices. This replaces KOReader's file-browser as the defa
 
 Status: working prototype. This is not an official KOReader project. I'm building this because I have several second-language books I want to read on a larger device (and I'm tired of kindle/apple books/remarkable enshittification).
 
-![KOReader Bookshelf home prototype](doc/images/bookshelf-home.png)
+<p>
+  <img src="doc/images/bookshelf-horizontal-rails-remarkable-20260507.png" alt="KOReader Bookshelf horizontal book rails on reMarkable" width="320">
+  <img src="doc/images/reader-progress-three-zone-remarkable-20260507.png" alt="KOReader Bookshelf reading view with three-zone footer on reMarkable" width="320">
+</p>
 
 ## Goals
 
