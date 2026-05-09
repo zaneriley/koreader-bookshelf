@@ -1,0 +1,70 @@
+name: koreader-bookshelf-preview
+
+services:
+  novnc-preview:
+    build:
+      context: .
+      dockerfile: docker/novnc/Dockerfile
+    image: koreader-bookshelf-novnc:local
+    container_name: koreader-bookshelf-novnc-preview
+    ports:
+      - "${BOOKSHELF_PREVIEW_PORT:-6081}:6080"
+    environment:
+      DISPLAY: ":99"
+      KO_HOME: "/preview-home"
+      HOME: "/root"
+      XDG_RUNTIME_DIR: "/tmp/xdg-runtime-root"
+      EMULATE_READER_W: "${EMULATE_READER_W:-1404}"
+      EMULATE_READER_H: "${EMULATE_READER_H:-1872}"
+      EMULATE_READER_DPI: "${EMULATE_READER_DPI:-226}"
+      KOREADER_ARGS: "${KOREADER_ARGS:--d}"
+    volumes:
+      - type: bind
+        source: ${KOREADER_CHECKOUT:?KOREADER_CHECKOUT must point at a KOReader checkout}
+        target: /work
+      - type: bind
+        source: ${BOOKSHELF_PREVIEW_HOME:?BOOKSHELF_PREVIEW_HOME must point at a preview profile directory}
+        target: /preview-home
+      - type: bind
+        source: ${BOOKSHELF_REPO:?BOOKSHELF_REPO must point at the Bookshelf repo}/bookshelf.koplugin
+        target: /kobuild/install/koreader/plugins/bookshelf.koplugin
+        read_only: true
+      - type: bind
+        source: ${KOREADER_CHECKOUT:?KOREADER_CHECKOUT must point at a KOReader checkout}/reader.lua
+        target: /kobuild/install/koreader/reader.lua
+        read_only: true
+      - type: bind
+        source: ${KOREADER_CHECKOUT:?KOREADER_CHECKOUT must point at a KOReader checkout}/frontend/dispatcher.lua
+        target: /kobuild/install/koreader/frontend/dispatcher.lua
+        read_only: true
+      - type: bind
+        source: ${KOREADER_CHECKOUT:?KOREADER_CHECKOUT must point at a KOReader checkout}/frontend/pluginloader.lua
+        target: /kobuild/install/koreader/frontend/pluginloader.lua
+        read_only: true
+      - type: bind
+        source: ${KOREADER_CHECKOUT:?KOREADER_CHECKOUT must point at a KOReader checkout}/frontend/apps/filemanager/filemanager.lua
+        target: /kobuild/install/koreader/frontend/apps/filemanager/filemanager.lua
+        read_only: true
+      - type: bind
+        source: ${KOREADER_CHECKOUT:?KOREADER_CHECKOUT must point at a KOReader checkout}/frontend/apps/filemanager/filemanagermenu.lua
+        target: /kobuild/install/koreader/frontend/apps/filemanager/filemanagermenu.lua
+        read_only: true
+      - type: bind
+        source: ${KOREADER_CHECKOUT:?KOREADER_CHECKOUT must point at a KOReader checkout}/frontend/apps/reader/readerui.lua
+        target: /kobuild/install/koreader/frontend/apps/reader/readerui.lua
+        read_only: true
+      - type: bind
+        source: ${KOREADER_CHECKOUT:?KOREADER_CHECKOUT must point at a KOReader checkout}/frontend/apps/reader/modules/readerfooter.lua
+        target: /kobuild/install/koreader/frontend/apps/reader/modules/readerfooter.lua
+        read_only: true
+      - type: bind
+        source: ${KOREADER_CHECKOUT:?KOREADER_CHECKOUT must point at a KOReader checkout}/frontend/ui/elements/filemanager_menu_order.lua
+        target: /kobuild/install/koreader/frontend/ui/elements/filemanager_menu_order.lua
+        read_only: true
+      - type: volume
+        source: koreader-bookshelf-build
+        target: /kobuild
+
+volumes:
+  koreader-bookshelf-build:
+    external: true

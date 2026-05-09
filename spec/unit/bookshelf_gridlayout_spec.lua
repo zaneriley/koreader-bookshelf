@@ -41,7 +41,9 @@ describe("Bookshelf grid layout", function()
         assert.equals(1, #one.slots)
         assert.equals(16, one.slots[1].x)
         assert.equals(104, one.slots[1].w)
-        assert.equals(208, one.slots[1].h)
+        assert.equals(214, one.slots[1].h)
+        assert.equals(one.slots[1].title.y + one.slots[1].title.h, one.slots[1].menu.y)
+        assert.equals(one.slots[1].title.y + one.slots[1].title.h + 4, one.slots[1].metadata.y)
         assert.equals(full.slots[1].x, one.slots[1].x)
         assert.equals(full.slots[1].w, one.slots[1].w)
         assert.equals(full.slots[1].cover.w, one.slots[1].cover.w)
@@ -95,6 +97,66 @@ describe("Bookshelf grid layout", function()
         assert.equals(600, exact_five.slots[5].x + exact_five.slots[5].w)
     end)
 
+    it("derives rail scale for featured shelves without changing fixed-scale rails", function()
+        local large_scale = GridLayout.railScale("large", 746, {
+            full_count = 4,
+            peek = 0.5,
+        })
+        local large = GridLayout.rail("large", {
+            x = 0,
+            y = 0,
+            w = 746,
+            item_count = 6,
+            full_count = 4,
+            peek = 0.5,
+        })
+        local small = GridLayout.rail("small", {
+            x = 0,
+            y = 0,
+            w = 650,
+            item_count = 7,
+            scale = 1,
+        })
+
+        assert.equals(1, large_scale)
+        assert.equals(5, #large.slots)
+        assert.equals(16, large.slots[1].x)
+        assert.equals(508, large.slots[4].x)
+        assert.equals(672, large.slots[5].x)
+        assert.is_true(large.slots[5].x < large.right_edge)
+        assert.is_true(large.slots[5].x + large.slots[5].w > large.right_edge)
+        assert.equals(6, #small.slots)
+        assert.equals(616, small.slots[6].x)
+        assert.equals(104, small.slots[6].w)
+        assert.is_true(small.slots[6].x < small.right_edge)
+        assert.is_true(small.slots[6].x + small.slots[6].w > small.right_edge)
+    end)
+
+    it("derives snapped carousel windows from visible slots and page steps", function()
+        local first = GridLayout.pageWindow(10, 5, 1, 4)
+        local middle = GridLayout.pageWindow(10, 5, 2, 4)
+        local overflow = GridLayout.pageWindow(10, 5, 99, 4)
+        local empty = GridLayout.pageWindow(0, 5, 1, 4)
+
+        assert.equals(1, first.page)
+        assert.equals(3, first.max_page)
+        assert.equals(1, first.first)
+        assert.equals(5, first.last)
+        assert.equals(5, first.count)
+
+        assert.equals(2, middle.page)
+        assert.equals(5, middle.first)
+        assert.equals(9, middle.last)
+
+        assert.equals(3, overflow.page)
+        assert.equals(9, overflow.first)
+        assert.equals(10, overflow.last)
+        assert.equals(2, overflow.count)
+
+        assert.equals(1, empty.page)
+        assert.equals(0, empty.count)
+    end)
+
     it("wraps large shelves left-to-right, then top-to-bottom", function()
         local grid = GridLayout.grid("large", {
             x = 0,
@@ -126,6 +188,54 @@ describe("Bookshelf grid layout", function()
         assert.equals(222, large.cover_h)
         assert.equals(104, small.cover_w)
         assert.equals(156, small.cover_h)
+    end)
+
+    it("derives card height and text slots from resolved typography", function()
+        local text_stack = {
+            title_h = 50,
+            metadata_h = 15,
+            title_line_height = 0.12,
+            metadata_line_height = 0.02,
+        }
+        local metrics = GridLayout.metrics("small", 1, text_stack)
+        local grid = GridLayout.grid("small", {
+            x = 0,
+            y = 0,
+            w = 616,
+            rows = 1,
+            item_count = 1,
+            scale = 1,
+            text_stack = text_stack,
+        })
+        local slot = grid.slots[1]
+
+        assert.equals(235, metrics.card_h)
+        assert.equals(50, metrics.title_h)
+        assert.equals(15, metrics.metadata_h)
+        assert.equals(0.12, metrics.title_line_height)
+        assert.equals(162, slot.title.y)
+        assert.equals(216, slot.metadata.y)
+        assert.equals(slot.title.y + slot.title.h + metrics.title_to_metadata_gap, slot.metadata.y)
+        assert.equals(slot.metadata.y + slot.metadata.h + metrics.text_bottom_slack, slot.y + slot.h)
+        assert.equals(slot.y + slot.h - metrics.menu_h, slot.menu.y)
+    end)
+
+    it("keeps 24px card menu slots for the shared icon size", function()
+        local large = GridLayout.metrics("large", 1)
+        local small = GridLayout.metrics("small", 1)
+        local grid = GridLayout.grid("small", {
+            x = 0,
+            y = 0,
+            w = 616,
+            rows = 1,
+            item_count = 1,
+            scale = 1,
+        })
+
+        assert.equals(24, large.menu_h)
+        assert.equals(24, small.menu_h)
+        assert.equals(24, grid.slots[1].menu.h)
+        assert.equals(grid.slots[1].y + grid.slots[1].h - 24, grid.slots[1].menu.y)
     end)
 
     it("lays out bottom tabs as four padded 1fr columns", function()

@@ -1,0 +1,6 @@
+.git/
+.tmp/
+__pycache__/
+*.pyc
+*.log
+*.sdr/

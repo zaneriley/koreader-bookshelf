@@ -16,6 +16,8 @@ from pathlib import Path
 
 
 SCENARIOS = (
+    "default_bookshelf_launch",
+    "reader_home_bookshelf_return",
     "enter_home_bookshelf",
     "downloaded_books_cached_load",
     "first_visible_paint",

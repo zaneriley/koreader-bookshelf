@@ -24,9 +24,9 @@ local Bookshelf = WidgetContainer:extend{
 }
 
 function Bookshelf:onDispatcherRegisterActions()
-    Dispatcher:registerAction("bookshelf_show", {
+    Dispatcher:registerAction("library_show", {
         category = "none",
-        event = "ShowBookshelf",
+        event = "ShowLibrary",
         title = _("Library"),
         general = true,
     })
@@ -35,6 +35,7 @@ end
 function Bookshelf:init()
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
+    self:_scheduleLibraryHome()
 end
 
 function Bookshelf:addToMainMenu(menu_items)
@@ -42,9 +43,43 @@ function Bookshelf:addToMainMenu(menu_items)
         text = _("Library"),
         sorting_hint = "main",
         callback = function()
-            self:onShowBookshelf()
+            self:onShowLibrary()
         end,
     }
+end
+
+function Bookshelf:_readSetting(name)
+    if G_reader_settings and type(G_reader_settings.readSetting) == "function" then
+        return G_reader_settings:readSetting(name)
+    end
+end
+
+function Bookshelf:_isLibraryHome()
+    local home_view = self:_readSetting("home_view")
+    if home_view ~= nil then
+        return home_view == "library"
+    end
+    return (self:_readSetting("start_with") or "library") == "library"
+end
+
+function Bookshelf:_isReaderHost()
+    return self.ui and self.ui.document ~= nil
+end
+
+function Bookshelf:_scheduleLibraryHome()
+    if self._library_home_scheduled or self:_isReaderHost() or not self:_isLibraryHome() then
+        return
+    end
+    if not self.ui or type(self.ui.registerPostInitCallback) ~= "function" then
+        return
+    end
+
+    self._library_home_scheduled = true
+    self.ui:registerPostInitCallback(function()
+        UIManager:nextTick(function()
+            self:onShowLibrary()
+        end)
+    end)
 end
 
 function Bookshelf:getProvider()
@@ -98,7 +133,16 @@ function Bookshelf:getProvider()
     return self.provider
 end
 
-function Bookshelf:onShowBookshelf()
+function Bookshelf:onShowLibrary()
+    if self.ui and self.ui.return_to_previous_view and type(self.ui.onClose) == "function" then
+        self.ui:onClose()
+        return true
+    end
+
+    if self.bookshelf_ui and not self.bookshelf_ui._closed then
+        return true
+    end
+
     local BookshelfUI = dofile(self.path .. "/ui.lua")
 
     self.bookshelf_ui = BookshelfUI:new{
@@ -110,6 +154,13 @@ function Bookshelf:onShowBookshelf()
     }
     UIManager:show(self.bookshelf_ui)
     return true
+end
+
+function Bookshelf:onShowHome()
+    if self:_isLibraryHome() then
+        return self:onShowLibrary()
+    end
+    return false
 end
 
 return Bookshelf

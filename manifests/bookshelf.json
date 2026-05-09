@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "project": "koreader-bookshelf",
+  "artifacts": [
+    {
+      "id": "bookshelf_plugin_source",
+      "kind": "plugin_source",
+      "path": "bookshelf.koplugin"
+    },
+    {
+      "id": "local_koreader_checkout",
+      "kind": "koreader_checkout",
+      "path_environment_variable": "KOREADER_CHECKOUT",
+      "default_sibling_directory": "koreader",
+      "required_paths": [
+        "reader.lua",
+        "frontend",
+        "plugins"
+      ]
+    },
+    {
+      "id": "bookshelf_plugin_integration_path",
+      "kind": "plugin_integration_path",
+      "checkout_artifact": "local_koreader_checkout",
+      "source_artifact": "bookshelf_plugin_source",
+      "path": "plugins/bookshelf.koplugin",
+      "mirror_strategy": "exact_copy_or_symlink"
+    },
+    {
+      "id": "remarkable2_portrait",
+      "kind": "device_target",
+      "width": 1404,
+      "height": 1872,
+      "dpi": 226,
+      "orientation": "portrait"
+    },
+    {
+      "id": "reading_preset_capture_schema",
+      "kind": "capture_schema",
+      "root": "doc/captures",
+      "validator_command": "python3 tools/reading_preset_qa.py validate --captures doc/captures",
+      "required_manifest_fields": [
+        "capture_id",
+        "fixture_id",
+        "reading_preset_id",
+        "device_target",
+        "koreader_commit",
+        "plugin_commit",
+        "page_anchor",
+        "settings_snapshot",
+        "font_pack_manifest",
+        "full_page_screenshot",
+        "text_block_crop",
+        "status_bar_footer_crop",
+        "readable_measure_snapshot",
+        "visual_qa_note"
+      ]
+    }
+  ]
+}

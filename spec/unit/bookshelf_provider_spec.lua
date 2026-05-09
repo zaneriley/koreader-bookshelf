@@ -83,20 +83,41 @@ describe("Bookshelf downloaded-book provider", function()
         assert.is_true(record.select_enabled)
     end)
 
-    it("does not use file-browser lastdir as the downloaded-book source", function()
-        local old_settings = G_reader_settings
-        G_reader_settings = {
+    it("uses the OPDS fallback download folder when download_dir is not configured", function()
+        local old_settings = _G.G_reader_settings
+        _G.G_reader_settings = {
             readSetting = function(_, name)
                 if name == "lastdir" then
-                    return "/file-browser"
+                    return "/file-browser-downloads"
                 end
             end,
         }
 
         local download_dir = Provider.getDownloadDir({})
-        G_reader_settings = old_settings
+        _G.G_reader_settings = old_settings
 
-        assert.is_nil(download_dir)
+        assert.equals("/file-browser-downloads", download_dir)
+    end)
+
+    it("returns an empty shelf when the download directory is missing", function()
+        local rows = Provider.rowsFromDownloadDir({
+            download_dir = "/missing",
+            lfs = {
+                dir = function()
+                    error("missing directory")
+                end,
+                attributes = function()
+                    error("attributes should not be read after dir fails")
+                end,
+            },
+            DocumentRegistry = {
+                hasProvider = function()
+                    error("providers should not be probed after dir fails")
+                end,
+            },
+        })
+
+        assert.are.same({}, rows)
     end)
 
     it("sorts downloaded records deterministically", function()

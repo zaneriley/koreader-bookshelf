@@ -1,21 +1,25 @@
-# KOReader Bookshelf UX
+# KOReader Bookshelf
 
-An experimental library/ebook reader-like home for KOReader on reMarkable
-and other large e-ink devices. This replaces KOReader's file-browser as the default experience.
-
-Status: working prototype. This is not an official KOReader project. I'm building this because I have several second-language books I want to read on a larger device (and I'm tired of kindle/apple books/remarkable enshittification).
 
 <p>
   <img src="doc/images/bookshelf-horizontal-rails-remarkable-20260507.png" alt="KOReader Bookshelf horizontal book rails on reMarkable" width="320">
   <img src="doc/images/reader-progress-three-zone-remarkable-20260507.png" alt="KOReader Bookshelf reading view with three-zone footer on reMarkable" width="320">
 </p>
 
-## Goals
+KOReader Bookshelf is an experimental, opt-in prototype that brings a modern reading and library dashboard to Remarkable devices.
 
-- Make your books the primary objects on launch.
-- Keep the UX as fast as possible on e-ink: lazy integrations, fast first paint, cached book covers, and no network work on default home screen.
-- Preserve KOReader's FileManager as an explicit secondary path, not a removed capability.
-- Try my best to find a clean way to propose upstream changes back to KOReader if they'll consider it.
+### For Users: A Modern Library Experience
+We believe that e-ink devices should feel like paper, not file systems. The Bookshelf provides a high-performance alternative to the standard folder view:
+- **Visual Grid:** Fast-loading book covers on a clean, distraction-free surface.
+- **Native Feeling:** Seamless integration with your existing KOReader setup.
+- **Opt-In Safety:** Your file manager is always one tap away.
+
+
+### Quick Start
+Install the prototype and explore the future of the KOReader UI:
+```bash
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/zane/koreader-bookshelf/main/tools/install.sh)"
+```
 
 ## Repository Layout
 
@@ -40,15 +44,25 @@ Status: working prototype. This is not an official KOReader project. I'm buildin
 
 This repo is developed against a KOReader checkout. The Lua code runs inside KOReader's own environment; host-global Lua is not required.
 
-To try the plugin in a KOReader checkout, copy or link `bookshelf.koplugin/` to `plugins/bookshelf.koplugin` in that checkout, then apply the integration files from `integration/koreader/` to the matching KOReader paths.
-
-From the KOReader checkout:
+The source-of-truth boundary is executable. Edit `bookshelf.koplugin/` in this
+repo, then apply it to the local KOReader checkout and validate the mirror:
 
 ```sh
-./kodev run
+export KOREADER_CHECKOUT=/path/to/koreader
+python3 tools/apply_to_koreader_checkout.py
+python3 tools/validate_bookshelf_manifest.py --strict
 ```
 
-For a reMarkable-sized manual pass, use KOReader's emulator/noVNC workflow and set the emulator dimensions to 1404 x 1872 at 226 DPI. The current manual QA notes are in `doc/Bookshelf_prototype_measurement.md`.
+The validator must exit `0` before a local preview is trusted. To launch the
+repo-owned noVNC preview at reMarkable dimensions:
+
+```sh
+tools/preview.sh --checkout "$KOREADER_CHECKOUT" --port 6081
+```
+
+Then open `http://localhost:6081/vnc.html?autoconnect=true&resize=scale`.
+The wrapper applies the plugin mirror, validates it, seeds a sample library,
+resets the preview profile, and starts a disposable container.
 
 ## Verification
 

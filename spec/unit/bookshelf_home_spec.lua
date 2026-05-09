@@ -1,116 +1,286 @@
-describe("Bookshelf home launcher", function()
+describe("Bookshelf plugin FileManager choreography", function()
+    local Bookshelf
+    local FileChooser
     local UIManager
-    local BookshelfHome
-    local loadfile_stubbed
-    local uimanager_show_stubbed
 
     setup(function()
         require("commonrequire")
+        require("apps/filemanager/filemanager")
+        Bookshelf = dofile("plugins/bookshelf.koplugin/main.lua")
+        FileChooser = require("ui/widget/filechooser")
         UIManager = require("ui/uimanager")
     end)
 
-    local function reloadHome()
-        BookshelfHome = package.reload("apps/bookshelf/bookshelfhome")
-        BookshelfHome.provider = nil
-        BookshelfHome.shell = nil
-        BookshelfHome.bookshelf_ui = nil
-        return BookshelfHome
-    end
+    it("closes a temporary file manager overlay to reveal the existing Library", function()
+        local closed_filemanager = false
+        local plugin = setmetatable({
+            ui = {
+                return_to_previous_view = true,
+                onClose = function()
+                    closed_filemanager = true
+                end,
+            },
+        }, { __index = Bookshelf })
 
-    before_each(function()
-        loadfile_stubbed = false
-        uimanager_show_stubbed = false
-        reloadHome()
+        assert.is_true(plugin:onShowLibrary())
+        assert.is_true(closed_filemanager)
     end)
 
-    after_each(function()
-        if loadfile_stubbed then
-            _G.loadfile:revert()
-        end
-        if uimanager_show_stubbed then
-            UIManager.show:revert()
-        end
-        package.unload("apps/bookshelf/bookshelfhome")
-        package.unload("apps/reader/modules/readerdictionary")
+    it("does not stack a second Library for the same plugin instance", function()
+        local plugin = setmetatable({
+            bookshelf_ui = {
+                _closed = false,
+            },
+        }, { __index = Bookshelf })
+
+        assert.is_true(plugin:onShowLibrary())
     end)
 
-    it("shows the bookshelf UI instead of file manager chrome", function()
-        local shown_widget
-        local captured_opts
-        local provider = {
-            getDownloaded = function()
-                return {}
+    it("uses Back to close a temporary file manager instead of prompting to exit", function()
+        local closed_filemanager = false
+        local fake_filechooser = setmetatable({
+            ui = {
+                return_to_previous_view = true,
+                onClose = function()
+                    closed_filemanager = true
+                    return true
+                end,
+            },
+        }, { __index = FileChooser })
+
+        assert.is_true(fake_filechooser:onBack())
+        assert.is_true(closed_filemanager)
+    end)
+
+    it("claims generic Home only when Library is the home view", function()
+        local shown_library = false
+        local original_reader_settings = _G.G_reader_settings
+        local plugin = setmetatable({
+            onShowLibrary = function()
+                shown_library = true
+                return true
+            end,
+        }, { __index = Bookshelf })
+
+        _G.G_reader_settings = {
+            readSetting = function(_, name)
+                if name == "home_view" then
+                    return "library"
+                end
+            end,
+        }
+        assert.is_true(plugin:onShowHome())
+        assert.is_true(shown_library)
+
+        shown_library = false
+        _G.G_reader_settings = {
+            readSetting = function(_, name)
+                if name == "home_view" then
+                    return "filemanager"
+                end
+            end,
+        }
+        assert.is_false(plugin:onShowHome())
+        assert.is_false(shown_library)
+
+        _G.G_reader_settings = original_reader_settings
+    end)
+
+    it("schedules Library after FileManager post-init when Library is the home view", function()
+        local original_reader_settings = _G.G_reader_settings
+        local post_init_callback
+        local next_tick_callback
+        local shown_library = false
+        local registered_menu = false
+
+        stub(UIManager, "nextTick", function(_, callback)
+            next_tick_callback = callback
+        end)
+
+        _G.G_reader_settings = {
+            readSetting = function(_, name)
+                if name == "home_view" then
+                    return "library"
+                end
             end,
         }
 
-        stub(_G, "loadfile", function(path)
-            if path == "plugins/bookshelf.koplugin/ui.lua" then
-                return function()
-                    return {
-                        new = function(_, opts)
-                            captured_opts = opts
-                            return { id = "bookshelf-widget" }
-                        end,
-                    }
-                end
-            elseif path == "plugins/bookshelf.koplugin/provider.lua" then
-                return function()
-                    return provider
-                end
-            end
-            error("unexpected module load: " .. path)
-        end)
-        loadfile_stubbed = true
-        stub(UIManager, "show", function(_, widget)
-            shown_widget = widget
-        end)
-        uimanager_show_stubbed = true
+        local plugin = setmetatable({
+            ui = {
+                menu = {
+                    registerToMainMenu = function()
+                        registered_menu = true
+                    end,
+                },
+                registerPostInitCallback = function(_, callback)
+                    post_init_callback = callback
+                end,
+            },
+            onShowLibrary = function()
+                shown_library = true
+                return true
+            end,
+        }, { __index = Bookshelf })
 
-        assert.is_true(BookshelfHome:show())
-        assert.equals("bookshelf-widget", shown_widget.id)
-        assert.are.same(provider, captured_opts.provider)
-        assert.is_table(captured_opts.ui)
-        assert.is_function(captured_opts.ui.openFile)
-        assert.is_function(captured_opts.ui.showFileManager)
+        plugin:init()
+        assert.is_true(registered_menu)
+        assert.is_function(post_init_callback)
+        assert.is_false(shown_library)
+
+        post_init_callback()
+        assert.is_function(next_tick_callback)
+        assert.is_false(shown_library)
+
+        next_tick_callback()
+        assert.is_true(shown_library)
+
+        UIManager.nextTick:revert()
+        _G.G_reader_settings = original_reader_settings
     end)
 
-    it("keeps dictionary and OPDS modules lazy until tapped", function()
-        local dictionary_new_count = 0
-        local opds_new_count = 0
-        package.replace("apps/reader/modules/readerdictionary", {
-            new = function(_, opts)
-                dictionary_new_count = dictionary_new_count + 1
-                return { opts = opts }
-            end,
-        })
+    it("does not auto-show Library when the plugin is loaded inside a reader", function()
+        local original_reader_settings = _G.G_reader_settings
+        local post_init_callback
+        local registered_menu = false
 
-        stub(_G, "loadfile", function(path)
-            if path == "plugins/opds.koplugin/main.lua" then
-                return function()
-                    return {
-                        new = function(_, opts)
-                            opds_new_count = opds_new_count + 1
-                            return { opts = opts }
-                        end,
-                    }
+        _G.G_reader_settings = {
+            readSetting = function(_, name)
+                if name == "home_view" then
+                    return "library"
                 end
-            end
-            error("unexpected module load: " .. path)
+            end,
+        }
+
+        local plugin = setmetatable({
+            ui = {
+                document = {
+                    file = "/books/current.epub",
+                },
+                menu = {
+                    registerToMainMenu = function()
+                        registered_menu = true
+                    end,
+                },
+                registerPostInitCallback = function(_, callback)
+                    post_init_callback = callback
+                end,
+            },
+        }, { __index = Bookshelf })
+
+        plugin:init()
+
+        assert.is_true(registered_menu)
+        assert.is_nil(post_init_callback)
+
+        _G.G_reader_settings = original_reader_settings
+    end)
+end)
+
+describe("Bookshelf reader home integration", function()
+    local DocSettings
+    local FileManager
+    local ReaderUI
+    local UIManager
+    local original_save_settings_arc_file
+    local original_filemanager_instance
+    local original_reader_settings
+    local uimanager_send_event_stubbed
+
+    setup(function()
+        require("commonrequire")
+        DocSettings = require("docsettings")
+        FileManager = require("apps/filemanager/filemanager")
+        ReaderUI = require("apps/reader/readerui")
+        UIManager = require("ui/uimanager")
+    end)
+
+    before_each(function()
+        original_save_settings_arc_file = DocSettings.saveSettingsArcFile
+        original_filemanager_instance = FileManager.instance
+        original_reader_settings = _G.G_reader_settings
+        uimanager_send_event_stubbed = false
+    end)
+
+    after_each(function()
+        if uimanager_send_event_stubbed then
+            UIManager.sendEvent:revert()
+        end
+        DocSettings.saveSettingsArcFile = original_save_settings_arc_file
+        FileManager.instance = original_filemanager_instance
+        _G.G_reader_settings = original_reader_settings
+    end)
+
+    it("saves settings when running against v2026.03 without metadata archive support", function()
+        local doc_settings_flushed = false
+        local reader_settings_flushed = false
+        local handled_save_settings = false
+
+        DocSettings.saveSettingsArcFile = nil
+        _G.G_reader_settings = {
+            flush = function()
+                reader_settings_flushed = true
+            end,
+        }
+
+        local fake_reader = setmetatable({
+            doc_settings = {
+                flush = function()
+                    doc_settings_flushed = true
+                end,
+            },
+            handleEvent = function(_, event)
+                handled_save_settings = event.handler == "onSaveSettings"
+            end,
+        }, { __index = ReaderUI })
+
+        assert.has_no.errors(function()
+            fake_reader:saveSettings()
         end)
-        loadfile_stubbed = true
+        assert.is_true(handled_save_settings)
+        assert.is_true(doc_settings_flushed)
+        assert.is_true(reader_settings_flushed)
+    end)
 
-        local shell = BookshelfHome:getShell()
-        assert.equals(0, dictionary_new_count)
-        assert.equals(0, opds_new_count)
+    it("keeps the explicit File browser action separate from Library", function()
+        local closed_reader = false
+        local shown_file
+        local fake_reader = setmetatable({
+            document = {
+                file = "/books/current.epub",
+            },
+            onClose = function()
+                closed_reader = true
+            end,
+            showFileManager = function(_, file)
+                shown_file = file
+            end,
+        }, { __index = ReaderUI })
 
-        assert.is_table(shell:getDictionary())
-        assert.equals(1, dictionary_new_count)
-        assert.are.same(shell.dictionary, shell:getDictionary())
-        assert.equals(1, dictionary_new_count)
+        assert.is_true(fake_reader:onShowFileManager())
+        assert.is_true(closed_reader)
+        assert.equals("/books/current.epub", shown_file)
+    end)
 
-        assert.is_table(shell:getOPDS())
-        assert.equals(1, opds_new_count)
-        assert.are.same(shell.opds, shell:getOPDS())
-        assert.equals(1, opds_new_count)
+    it("sends generic Home after closing the reader", function()
+        local shown_file
+        local sent_event
+        stub(UIManager, "sendEvent", function(_, event)
+            sent_event = event
+        end)
+        uimanager_send_event_stubbed = true
+
+        local fake_reader = setmetatable({
+            document = {
+                file = "/books/current.epub",
+            },
+            onClose = function() end,
+            showFileManager = function(_, file)
+                shown_file = file
+            end,
+        }, { __index = ReaderUI })
+
+        assert.is_true(fake_reader:onHome())
+        assert.equals("/books/current.epub", shown_file)
+        assert.equals("onShowHome", sent_event.handler)
     end)
 end)

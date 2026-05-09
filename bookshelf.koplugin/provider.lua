@@ -268,6 +268,7 @@ function DownloadedBookProvider.getDownloadDir(opts)
     opts = opts or {}
     return asString(opts.download_dir)
         or asString(readSetting("download_dir"))
+        or asString(readSetting("lastdir"))
 end
 
 function DownloadedBookProvider.rowsFromDownloadDir(opts)
@@ -284,11 +285,16 @@ function DownloadedBookProvider.rowsFromDownloadDir(opts)
     local lfs = opts.lfs or require("libs/libkoreader-lfs")
     local DocumentRegistry = opts.DocumentRegistry or require("document/documentregistry")
     local rows = {}
+    local ok, iterator, dir_obj = pcall(lfs.dir, download_dir)
+    if not ok or type(iterator) ~= "function" then
+        return rows
+    end
 
-    for entry in lfs.dir(download_dir) do
+    for entry in iterator, dir_obj do
         if entry ~= "." and entry ~= ".." then
             local file = (download_dir ~= "/" and download_dir or "") .. "/" .. entry
-            local attributes = lfs.attributes(file)
+            local attr_ok, attributes = pcall(lfs.attributes, file)
+            attributes = attr_ok and attributes or nil
             if attributes and attributes.mode == "file" and DocumentRegistry:hasProvider(file) then
                 table.insert(rows, {
                     file = file,

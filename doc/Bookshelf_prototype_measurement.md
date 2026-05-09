@@ -134,36 +134,25 @@ installs, or network services that are not part of the scenario under test.
 
 ## Local Emulator Harness
 
-KOReader's SDL emulator can be exposed for manual QA through a disposable
-noVNC container. The wrapper lives in local scratch at
-`.tmp/bookshelf-novnc/` and installs only container packages, not host Lua or
-other global runtimes.
+KOReader's SDL emulator is exposed for manual QA through the repo-owned
+`tools/preview.sh` wrapper and `docker-compose.yml`. It installs only container
+packages, not host Lua or other global runtimes.
 
 The current reMarkable-sized run target is:
 
 ```sh
-docker run -d --name koreader-bookshelf-novnc -p 6080:6080 \
-  -e KO_HOME=/kobuild/install/koreader \
-  -e EMULATE_READER_W=1404 \
-  -e EMULATE_READER_H=1872 \
-  -e EMULATE_READER_DPI=226 \
-  -v "$PWD:/work" \
-  -v "$PWD/plugins/bookshelf.koplugin:/kobuild/install/koreader/plugins/bookshelf.koplugin:ro" \
-  -v koreader-bookshelf-build:/kobuild \
-  koreader-bookshelf-novnc
+tools/preview.sh --checkout "$KOREADER_CHECKOUT" --port 6081
 ```
 
-Open `http://localhost:6080/vnc.html?autoconnect=true&resize=scale` to inspect
+Open `http://localhost:6081/vnc.html?autoconnect=true&resize=scale` to inspect
 the live SDL window. Computer Use can see that browser surface; `xdotool` inside
 the container can inject deterministic taps against the Xvfb display when
 browser-canvas pixel clicks are unreliable.
 
-Prefer recreating the disposable container over `docker restart` when validating
-startup. A restart can leave Xvfb display `:99` marked active and break noVNC
-while KOReader continues running. On a fresh emulator profile, KOReader may show
-its upstream one-time color-rendering notice before Bookshelf; dismiss that
-notice before judging the shelf, or launch with `KO_HOME=/kobuild/install/koreader`
-so the existing emulator settings file is used.
+`tools/preview.sh` removes old preview containers before every normal launch,
+applies `bookshelf.koplugin/` into the KOReader checkout, validates the mirror,
+resets `.tmp/preview-home/default`, disables first-run Statistics conversion
+notices for the preview profile, and seeds a cover-rich sample library.
 
 Observed on 2026-05-05:
 

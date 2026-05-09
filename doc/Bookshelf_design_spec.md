@@ -75,6 +75,20 @@ and All books.
   title baseline as the category header.
 - `View: Grid` is omitted until a list view exists.
 
+## Spacing Tokens
+
+Vertical spacing is shared by named layout tokens rather than shelf-specific
+magic numbers.
+
+| Token | Value |
+| --- | ---: |
+| Title to first shelf | 24 |
+| Category header height | 30 |
+| Header to shelf body | 12 |
+| Continue to lower stack minimum | 28 |
+| Recently added to All books | 32 |
+| Lower stack bottom margin | 16 |
+
 ## Book Grid
 
 Book covers use a fixed 2:3 portrait ratio in every shelf. Cards remain fixed
@@ -83,7 +97,7 @@ width and left-aligned; empty columns stay empty instead of stretching covers.
 | Grid | Card | Cover | Cover ratio |
 | --- | ---: | ---: | ---: |
 | Large shelves | 148 x 284 | 148 x 222 | 2:3 |
-| All books | 104 x 208 | 104 x 156 | 2:3 |
+| All books | 104 x 214 | 104 x 156 | 2:3 |
 
 Both grid sizes use the same fixed 16px column gutter. If a viewport cannot fit
 the maximum column count with that gutter, the grid uses fewer columns. It must
@@ -91,6 +105,22 @@ not compress spacing to force another book into the row.
 
 The cover border wraps only the artwork/placeholder cover. Title, metadata, and
 the menu icon sit underneath without a surrounding card border.
+
+Card menu slots are 24px high in both grid sizes so the shared 24px icon fits
+inside the card layout. Menu icons must not overflow into shelf or tab spacing.
+
+## Screen Layout
+
+The lower shelf stack is bottom-anchored above the persistent bottom tabs.
+`Recently added` and `All books` move as one stack, with `All books` reserved as
+a one-row shelf for now. Extra vertical space belongs to the `Continue reading`
+region above that stack, up to the large-shelf card height. When the lower stack
+needs room above the bottom tabs, the `Continue reading` region shrinks first.
+The empty state uses that balanced body height instead of forcing lower shelves
+into the tab area.
+
+On cramped viewports, the lower stack may stop being pinned so it never overlaps
+the `Continue reading` region.
 
 ## Icon System
 
@@ -112,20 +142,21 @@ such as `>`.
 
 ## Empty States
 
-The Continue reading shelf has its own compact empty state. It should not reuse
+The Continue reading shelf has its own taller empty state. It should not reuse
 the full-library empty message and should not render a dashed shelf placeholder.
 
 | Element | Value |
 | --- | ---: |
-| Container height | 116 |
+| Container body height | 284 |
 | Container border | 1px light gray |
-| Side margin | 16 |
+| Inner padding | 16 |
 | Icon | Open book |
 | Title | Nothing in progress yet |
 | Body | Start reading a book and it will appear here. |
 
 The icon, title, and body are centered as a quiet reading-progress prompt. The
-container spans the shelf content width and leaves the next shelf visible.
+container spans the shelf content width and uses the same inner padding as the
+book-grid gutter.
 
 ## Placeholder Covers
 

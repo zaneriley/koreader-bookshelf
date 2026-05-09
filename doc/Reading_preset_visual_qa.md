@@ -30,8 +30,11 @@ are distilled into this doc or another durable plugin document.
 | --- | --- |
 | KOReader Profile | KOReader's existing Profiles plugin artifact. Use this term only for the upstream/native profile mechanism. |
 | Reading Preset | A Bookshelf-owned manifest with intent, exact KOReader settings or KOReader Profile export, evidence render cases, and rationale for every setting delta. It translates private Bookshelf vocabulary into existing KOReader terms such as Profiles, Typography rules, Style tweaks, Embedded CSS, and Status Bar/Footer settings. |
+| Readable Measure Rule | A Bookshelf-owned rule that turns a target measure range, viewport, typeface, and body size into a readable text-block target for a Latin-script preset. |
+| KOReader Profile Translator | The Bookshelf adapter that turns a Readable Measure Rule result into existing KOReader profile actions and settings. |
 | Private Default Reading Preset | A Bookshelf UX candidate only. It is never an upstream KOReader default and is applied only through explicit user or plugin action. |
 | Publisher CSS Recovery Preset | A non-default runtime Reading Preset used for source-quality stress cases where publisher CSS damages readability. It changes only KOReader settings, preserves the source EPUB, records all overrides, and never becomes any default. |
+| Font Pack | A manifest-backed set of font files with roles, licenses, hashes, family names, fallbacks, and observed KOReader behavior. |
 | Fixture | A specific EPUB test input with source identity, file hash, stable page anchor, fixture facets, and expected rendering risks. |
 | Fixture Candidate | An incomplete fixture row. It cannot satisfy any QA gate until all required fixture fields are filled. |
 | Fixture Facets | The attributes that explain why a fixture exists: language, script, direction, writing mode, content features, and source quality. |
@@ -141,8 +144,11 @@ Each render case captures:
 | `plugin_commit` | Bookshelf plugin commit used for the capture. |
 | `page_anchor` | Location used to reopen the same page. |
 | `settings_snapshot` | Path to the KOReader Settings Snapshot. |
+| `font_pack_manifest` | Path to the Font Pack manifest used by the render case. |
 | `full_page_screenshot` | Path to the full reading page screenshot. |
+| `text_block_crop` | Path to the body text-block crop used for measure and texture review. |
 | `status_bar_footer_crop` | Path to the bottom status bar/footer crop. |
+| `readable_measure_snapshot` | Path to the readable-measure JSON snapshot, including measured line metrics and gate results. |
 | `visual_qa_note` | Path to the Visual QA Note file. |
 
 Raw capture runs may start in `.tmp/<date>-reading-preset-qa/`. Promote only
@@ -155,7 +161,10 @@ Each promoted capture directory contains:
 doc/captures/<capture_id>/
   manifest.json
   settings.json
+  font-pack.json
+  measure.json
   full-page.png
+  text-block.png
   status-bar-footer.png
   note.md
 ```
@@ -166,14 +175,47 @@ into a durable capture record by accident.
 
 ## Evidence Per Render Case
 
-Each render case needs four pieces of evidence:
+Each render case needs seven pieces of evidence:
 
 1. Full page screenshot.
-2. Status bar/footer crop.
-3. KOReader Settings Snapshot.
-4. Visual QA Note with reviewer, date, pass/fail, and rationale.
+2. Text-block crop.
+3. Status bar/footer crop.
+4. KOReader Settings Snapshot.
+5. Font Pack manifest.
+6. Readable-measure snapshot.
+7. Visual QA Note with reviewer, date, pass/fail, and rationale.
 
-The note must include enough provenance to reproduce the render:
+The readable-measure snapshot is JSON:
+
+```json
+{
+  "median_cpl": 64,
+  "words_per_line": 12,
+  "gates": {
+    "language_gate": "pass",
+    "hyphenation_gate": "pass",
+    "spacing_evenness_gate": "pass",
+    "font_color_gate": "pass",
+    "paragraph_rhythm_gate": "pass",
+    "page_turn_gate": "not-applicable"
+  },
+  "failure_owner": ""
+}
+```
+
+Gate values are `pass`, `fail`, `needs-followup`, or `not-applicable`.
+Failed render cases must name one failure owner:
+
+- `Reading Preset tuning`
+- `Readable Measure Rule`
+- `Font Pack evidence`
+- `Fixture rejection`
+- `KOReader Profile Translator`
+- `Publisher CSS Recovery Preset`
+- `KOReader upstream issue`
+- `CREngine renderer defect`
+
+The Visual QA Note must include enough provenance to reproduce the render:
 
 ```text
 reviewer:

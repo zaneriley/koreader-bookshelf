@@ -19,20 +19,27 @@ REQUIRED_MANIFEST_FIELDS = (
     "plugin_commit",
     "page_anchor",
     "settings_snapshot",
+    "font_pack_manifest",
     "full_page_screenshot",
+    "text_block_crop",
     "status_bar_footer_crop",
+    "readable_measure_snapshot",
     "visual_qa_note",
 )
 
 PATH_FIELDS = (
     "settings_snapshot",
+    "font_pack_manifest",
     "full_page_screenshot",
+    "text_block_crop",
     "status_bar_footer_crop",
+    "readable_measure_snapshot",
     "visual_qa_note",
 )
 
 PNG_FIELDS = (
     "full_page_screenshot",
+    "text_block_crop",
     "status_bar_footer_crop",
 )
 
@@ -59,6 +66,34 @@ MATCHING_NOTE_FIELDS = (
 )
 
 VALID_RESULTS = ("pass", "fail", "needs-followup")
+VALID_GATE_RESULTS = ("pass", "fail", "needs-followup", "not-applicable")
+VALID_FAILURE_OWNERS = (
+    "Reading Preset tuning",
+    "Readable Measure Rule",
+    "Font Pack evidence",
+    "Fixture rejection",
+    "KOReader Profile Translator",
+    "Publisher CSS Recovery Preset",
+    "KOReader upstream issue",
+    "CREngine renderer defect",
+)
+REQUIRED_MEASURE_FIELDS = (
+    "median_cpl",
+    "words_per_line",
+    "gates",
+)
+REQUIRED_MEASURE_GATES = (
+    "language_gate",
+    "hyphenation_gate",
+    "spacing_evenness_gate",
+    "font_color_gate",
+    "paragraph_rhythm_gate",
+    "page_turn_gate",
+)
+REQUIRED_FONT_PACK_FIELDS = (
+    "font_pack_id",
+    "fonts",
+)
 PLACEHOLDER_VALUES = ("", "any", "todo", "tbd", "[z to fill]", "z to fill")
 CAPTURE_ID_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-.+")
 
@@ -151,6 +186,77 @@ def resolve_capture_path(capture_dir, value, field):
     return path
 
 
+def parse_non_negative_number(path, payload, field):
+    try:
+        value = float(payload[field])
+    except (TypeError, ValueError) as err:
+        raise QAValidationError(f"{path}: {field} must be a number") from err
+    if value < 0:
+        raise QAValidationError(f"{path}: {field} must be non-negative")
+    return value
+
+
+def validate_font_pack(path):
+    payload = read_json_object(path)
+    missing = [field for field in REQUIRED_FONT_PACK_FIELDS if field not in payload]
+    if missing:
+        raise QAValidationError(
+            f"{path}: Font Pack manifest is missing fields: {', '.join(missing)}"
+        )
+    placeholders = [
+        field for field in REQUIRED_FONT_PACK_FIELDS if is_placeholder(payload.get(field))
+    ]
+    if placeholders:
+        raise QAValidationError(
+            f"{path}: Font Pack manifest has placeholder fields: {', '.join(placeholders)}"
+        )
+    if not isinstance(payload["fonts"], list) or not payload["fonts"]:
+        raise QAValidationError(f"{path}: fonts must be a non-empty list")
+    return payload
+
+
+def validate_readable_measure_snapshot(path, note_result):
+    payload = read_json_object(path)
+    missing = [field for field in REQUIRED_MEASURE_FIELDS if field not in payload]
+    if missing:
+        raise QAValidationError(
+            f"{path}: readable measure snapshot is missing fields: {', '.join(missing)}"
+        )
+
+    parse_non_negative_number(path, payload, "median_cpl")
+    parse_non_negative_number(path, payload, "words_per_line")
+
+    gates = payload["gates"]
+    if not isinstance(gates, dict):
+        raise QAValidationError(f"{path}: gates must be a JSON object")
+    missing_gates = [field for field in REQUIRED_MEASURE_GATES if field not in gates]
+    if missing_gates:
+        raise QAValidationError(
+            f"{path}: readable measure snapshot is missing gates: {', '.join(missing_gates)}"
+        )
+    invalid_gates = [
+        field for field in REQUIRED_MEASURE_GATES
+        if gates[field] not in VALID_GATE_RESULTS
+    ]
+    if invalid_gates:
+        raise QAValidationError(
+            f"{path}: gates must be one of {', '.join(VALID_GATE_RESULTS)}: "
+            f"{', '.join(invalid_gates)}"
+        )
+
+    failure_owner = payload.get("failure_owner")
+    if is_placeholder(failure_owner):
+        failure_owner = None
+    if note_result == "fail" and not failure_owner:
+        raise QAValidationError(f"{path}: failed render cases require failure_owner")
+    if failure_owner and failure_owner not in VALID_FAILURE_OWNERS:
+        raise QAValidationError(
+            f"{path}: failure_owner must be one of {', '.join(VALID_FAILURE_OWNERS)}"
+        )
+
+    return payload
+
+
 def validate_manifest(capture_dir):
     capture_dir = Path(capture_dir)
     manifest = read_json_object(manifest_path(capture_dir))
@@ -192,6 +298,7 @@ def validate_manifest(capture_dir):
     settings = read_json_object(resolved_paths["settings_snapshot"])
     if not settings:
         raise QAValidationError(f"{capture_dir}: settings snapshot must not be empty")
+    validate_font_pack(resolved_paths["font_pack_manifest"])
 
     note = parse_note(resolved_paths["visual_qa_note"])
     missing_note = [field for field in REQUIRED_NOTE_FIELDS if field not in note]
@@ -220,6 +327,11 @@ def validate_manifest(capture_dir):
         raise QAValidationError(
             f"{capture_dir}: note does not match manifest fields: {', '.join(mismatches)}"
         )
+
+    validate_readable_measure_snapshot(
+        resolved_paths["readable_measure_snapshot"],
+        note["result"],
+    )
 
     return {
         "capture_id": capture_id,
