@@ -35,6 +35,7 @@ end
 function Bookshelf:init()
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
+    self:_scheduleReadingPreset()
     self:_scheduleLibraryHome()
 end
 
@@ -64,6 +65,66 @@ end
 
 function Bookshelf:_isReaderHost()
     return self.ui and self.ui.document ~= nil
+end
+
+function Bookshelf:_scheduleReadingPreset()
+    if not self:_isReaderHost() or not self.ui or type(self.ui.registerPostReaderReadyCallback) ~= "function" then
+        return
+    end
+
+    local preset_id = self:_readSetting("bookshelf_auto_apply_reading_preset")
+    if type(preset_id) ~= "string" or preset_id == "" then
+        return
+    end
+
+    self.ui:registerPostReaderReadyCallback(function()
+        UIManager:nextTick(function()
+            self:_applyReadingPreset(preset_id)
+        end)
+    end)
+end
+
+function Bookshelf:_applyReadingPreset(preset_id)
+    local ok, ReadingPreset = pcall(dofile, self.path .. "/readingpreset.lua")
+    if not ok then
+        logger.warn("Bookshelf reading preset loader failed:", ReadingPreset)
+        return false
+    end
+
+    local derived_ok, result = pcall(ReadingPreset.deriveProfile, {
+        preset_id = preset_id,
+    })
+    if not derived_ok then
+        logger.warn("Bookshelf reading preset derivation failed:", result)
+        return false
+    end
+    if result.result == "fail" then
+        logger.warn("Bookshelf reading preset did not meet readable measure:", result.failure_owner)
+        return false
+    end
+
+    Dispatcher:execute(result.profile)
+    if self.ui and self.ui.styletweak and result.css_tweak then
+        self.ui.styletweak.tweaks_by_id["bookshelf_preset_tweak"] = {
+            id = "bookshelf_preset_tweak",
+            priority = 999,
+
+            css = result.css_tweak,
+        }
+        self.ui.styletweak.doc_tweaks["bookshelf_preset_tweak"] = true
+        self.ui.styletweak:updateCssText(true)
+        logger.info("Bookshelf injected CSS style tweak to override publisher formatting.")
+    end
+
+    logger.info(
+        "Bookshelf applied reading preset:",
+        preset_id,
+        "font:",
+        result.profile.set_font,
+        "estimated_cpl:",
+        result.candidate and result.candidate.estimated_cpl
+    )
+    return true
 end
 
 function Bookshelf:_scheduleLibraryHome()

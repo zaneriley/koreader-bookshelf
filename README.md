@@ -24,6 +24,9 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/zane/koreader-bookshelf/ma
 ## Repository Layout
 
 - `bookshelf.koplugin/`: KOReader plugin code for the Library surface.
+- `assets/fonts/`: font-pack files used by Bookshelf reading-preset previews.
+- `manifests/reading-presets/` and `manifests/font-packs/`: preset and font
+  pack source-of-truth records.
 - `integration/koreader/`: KOReader core integration files that are still best
   carried in a fork until a clean upstream hook exists.
 - `spec/unit/`: unit tests for provider behavior, Home routing, and measurement
@@ -62,7 +65,9 @@ tools/preview.sh --checkout "$KOREADER_CHECKOUT" --port 6081
 
 Then open `http://localhost:6081/vnc.html?autoconnect=true&resize=scale`.
 The wrapper applies the plugin mirror, validates it, seeds a sample library,
-resets the preview profile, and starts a disposable container.
+installs preview font packs into the disposable profile, enables the
+`literary-latin` reading preset for opened EPUBs, and starts a disposable
+container.
 
 ## Verification
 

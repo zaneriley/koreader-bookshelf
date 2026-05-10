@@ -1,0 +1,26 @@
+{
+  "reading_preset_id": "literary-latin",
+  "display_name": "Bookshelf Literary Latin",
+  "intent": "Latin-script literary prose with a quiet book-like measure and preserved publisher styling by default.",
+  "language_scope": {
+    "script": "Latin",
+    "direction": "ltr",
+    "writing_mode": "horizontal-tb"
+  },
+  "font_pack_id": "source-serif-4-smtext",
+  "readable_measure_rule": {
+    "rule_id": "latin-literary-cpl",
+    "target_cpl": 64,
+    "preferred_cpl": {
+      "min": 62,
+      "max": 68
+    },
+    "acceptable_cpl": {
+      "min": 50,
+      "max": 78
+    }
+  },
+  "publisher_css_posture": "preserve_by_default",
+  "failure_route": "publisher-css-recovery",
+  "ko_reader_profile_translator": "bookshelf.koplugin/readingpreset.lua"
+}

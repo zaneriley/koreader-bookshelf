@@ -35,6 +35,17 @@
       "orientation": "portrait"
     },
     {
+      "id": "source_serif_4_smtext_font_pack",
+      "kind": "font_pack",
+      "path": "manifests/font-packs/source-serif-4-smtext.json"
+    },
+    {
+      "id": "literary_latin_reading_preset",
+      "kind": "reading_preset",
+      "path": "manifests/reading-presets/literary-latin.json",
+      "font_pack_artifact": "source_serif_4_smtext_font_pack"
+    },
+    {
       "id": "reading_preset_capture_schema",
       "kind": "capture_schema",
       "root": "doc/captures",

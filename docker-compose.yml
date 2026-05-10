@@ -13,6 +13,8 @@ services:
       DISPLAY: ":99"
       KO_HOME: "/preview-home"
       HOME: "/root"
+      XDG_DATA_HOME: "/preview-home/.local/share"
+      EXT_FONT_DIR: "/preview-home/.local/share/fonts"
       XDG_RUNTIME_DIR: "/tmp/xdg-runtime-root"
       EMULATE_READER_W: "${EMULATE_READER_W:-1404}"
       EMULATE_READER_H: "${EMULATE_READER_H:-1872}"

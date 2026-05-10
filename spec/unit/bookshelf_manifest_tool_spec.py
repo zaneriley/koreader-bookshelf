@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 import tempfile
 import unittest
@@ -76,6 +77,47 @@ class BookshelfManifestToolTest(unittest.TestCase):
                 validate_bookshelf_manifest.compare_plugin_source(source, target, "plugin")
 
         self.assertEqual(validate_bookshelf_manifest.EXIT_INTEGRITY, raised.exception.exit_code)
+
+    def test_font_pack_and_reading_preset_payloads_validate_as_linked_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            font_path = root / "assets" / "fonts" / "SourceSerif4SmText-Regular.ttf"
+            font_path.parent.mkdir(parents=True)
+            font_path.write_bytes(b"font")
+            digest = hashlib.sha256(b"font").hexdigest()
+            manifest_path = root / "manifests" / "font-packs" / "source-serif-4-smtext.json"
+            manifest_path.parent.mkdir(parents=True)
+            manifest_path.write_text(
+                json.dumps({
+                    "font_pack_id": "source-serif-4-smtext",
+                    "roles": [{
+                        "role": "body_regular",
+                        "path": "assets/fonts/SourceSerif4SmText-Regular.ttf",
+                        "koreader_face": "Source Serif 4 SmText",
+                        "sha256": digest,
+                    }],
+                }),
+                encoding="utf-8",
+            )
+
+            font_pack_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            validate_bookshelf_manifest.validate_font_pack_payload(root, font_pack_payload, "font_pack")
+            validate_bookshelf_manifest.validate_reading_preset_payload(
+                root,
+                {
+                    "reading_preset_id": "literary-latin",
+                    "font_pack_id": "source-serif-4-smtext",
+                    "readable_measure_rule": {"target_cpl": 64},
+                },
+                {"id": "literary_latin_reading_preset", "font_pack_artifact": "source_serif_4_smtext_font_pack"},
+                {
+                    "source_serif_4_smtext_font_pack": {
+                        "kind": "font_pack",
+                        "path": "manifests/font-packs/source-serif-4-smtext.json",
+                    },
+                },
+                "reading_preset",
+            )
 
 
 class BookshelfApplyToolTest(unittest.TestCase):

@@ -146,6 +146,10 @@ if [[ "${reset_profile}" -eq 1 ]]; then
     rm -rf "${BOOKSHELF_PREVIEW_HOME}"
 fi
 mkdir -p "${BOOKSHELF_PREVIEW_HOME}/screenshots"
+if [[ -d "${repo_root}/assets/fonts" ]]; then
+    mkdir -p "${BOOKSHELF_PREVIEW_HOME}/.local/share/fonts/bookshelf"
+    cp -R "${repo_root}/assets/fonts/." "${BOOKSHELF_PREVIEW_HOME}/.local/share/fonts/bookshelf/"
+fi
 
 if [[ ! -f "${BOOKSHELF_PREVIEW_HOME}/settings.reader.lua" ]]; then
     cat > "${BOOKSHELF_PREVIEW_HOME}/settings.reader.lua" <<SETTINGS
@@ -153,6 +157,7 @@ if [[ ! -f "${BOOKSHELF_PREVIEW_HOME}/settings.reader.lua" ]]; then
 return {
     ["auto_standby_timeout_seconds"] = -1,
     ["auto_suspend_timeout_seconds"] = -1,
+    ["bookshelf_auto_apply_reading_preset"] = "literary-latin",
     ["color_rendering"] = false,
     ["download_dir"] = "/work/.tmp/bookshelf-sample-library",
     ["footer"] = {

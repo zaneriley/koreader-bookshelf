@@ -103,6 +103,33 @@ local LibraryUI = InputContainer:extend{
     pressed_zone_id = nil,
 }
 
+function LibraryUI:_triggerBackgroundExtraction()
+    local manager = self:_bookInfoManager()
+    if not manager then return end
+    
+    local to_extract = {}
+    local entries = self:_libraryEntries()
+    for _, entry in ipairs(entries) do
+        local file = self:_entryFile(entry)
+        if file then
+            local ok, bookinfo = pcall(manager.getBookInfo, manager, file, false)
+            if not ok or type(bookinfo) ~= "table" or bookinfo.has_cover == nil then
+                table.insert(to_extract, { filepath = file, cover_specs = nil })
+            end
+        end
+    end
+    
+    if #to_extract > 0 then
+        logger.info("Bookshelf triggering background extraction for", #to_extract, "books")
+        UIManager:nextTick(function()
+            local launched = manager:extractInBackground(to_extract)
+            if launched then
+                self:_scheduleCoverCacheRetry()
+            end
+        end)
+    end
+end
+
 function LibraryUI:init()
     self.dimen = Geom:new{
         x = 0, y = 0,
@@ -127,6 +154,7 @@ function LibraryUI:init()
     if Device:hasKeys() then
         self.key_events.Close = { { Device.input.group.Back } }
     end
+    self:_triggerBackgroundExtraction()
 end
 
 function LibraryUI:closeBookshelf(refresh_type)
@@ -1053,7 +1081,11 @@ function LibraryUI:_cachedCoverFor(entry, w, h)
         return nil
     end
 
+    logger.info("Bookshelf cover trace: requesting getBookInfo for", self:_entryFile(entry))
+
     local ok, bookinfo = pcall(manager.getBookInfo, manager, self:_entryFile(entry), true)
+    logger.info("Bookshelf cover trace: bookinfo.has_cover=", bookinfo and bookinfo.has_cover, "in_progress=", bookinfo and bookinfo.in_progress)
+
     if not ok or type(bookinfo) ~= "table" then
         self:_scheduleCoverCacheRetry()
         return nil

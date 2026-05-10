@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import filecmp
+import hashlib
 import json
 import os
 import re
@@ -27,6 +28,8 @@ KNOWN_KINDS = {
     "koreader_checkout",
     "plugin_integration_path",
     "device_target",
+    "font_pack",
+    "reading_preset",
     "capture_schema",
 }
 HOST_PATH_PATTERNS = (
@@ -121,6 +124,70 @@ def require_path_exists(path: Path, field: str) -> None:
         raise ValidationError(EXIT_PATH, f"{field}: path does not exist: {path}")
 
 
+def load_json_artifact(path: Path, field: str) -> dict:
+    require_path_exists(path, field)
+    payload = load_json_object(path)
+    validate_manifest_values(payload, (field,))
+    return payload
+
+
+def require_string(payload: dict, field: str, source: str) -> str:
+    value = payload.get(field)
+    if not isinstance(value, str):
+        raise ValidationError(EXIT_SCHEMA, f"{source}.{field}: must be a string")
+    return value
+
+
+def validate_font_pack_payload(root: Path, payload: dict, source: str) -> None:
+    require_string(payload, "font_pack_id", source)
+    roles = payload.get("roles")
+    if not isinstance(roles, list) or not roles:
+        raise ValidationError(EXIT_SCHEMA, f"{source}.roles: must be a non-empty list")
+    for index, role in enumerate(roles):
+        if not isinstance(role, dict):
+            raise ValidationError(EXIT_SCHEMA, f"{source}.roles.{index}: must be an object")
+        font_path = require_string(role, "path", f"{source}.roles.{index}")
+        resolved = resolve_project_path(root, font_path, f"{source}.roles.{index}.path")
+        require_path_exists(resolved, f"{source}.roles.{index}.path")
+        require_string(role, "role", f"{source}.roles.{index}")
+        require_string(role, "koreader_face", f"{source}.roles.{index}")
+        sha256 = require_string(role, "sha256", f"{source}.roles.{index}")
+        if not re.fullmatch(r"[0-9a-f]{64}", sha256):
+            raise ValidationError(EXIT_SCHEMA, f"{source}.roles.{index}.sha256: must be lowercase sha256")
+        actual = hashlib.sha256(resolved.read_bytes()).hexdigest()
+        if actual != sha256:
+            raise ValidationError(
+                EXIT_INTEGRITY,
+                f"{source}.roles.{index}.sha256: hash mismatch for {font_path}",
+            )
+
+
+def validate_reading_preset_payload(root: Path, payload: dict, artifact: dict, by_id: dict[str, dict], source: str) -> None:
+    require_string(payload, "reading_preset_id", source)
+    font_pack_id = require_string(payload, "font_pack_id", source)
+    font_pack_artifact = artifact.get("font_pack_artifact")
+    if font_pack_artifact not in by_id:
+        raise ValidationError(EXIT_SCHEMA, f"{artifact['id']}.font_pack_artifact: unknown id")
+    measure = payload.get("readable_measure_rule")
+    if not isinstance(measure, dict):
+        raise ValidationError(EXIT_SCHEMA, f"{source}.readable_measure_rule: must be an object")
+    target_cpl = measure.get("target_cpl")
+    if not isinstance(target_cpl, int) or target_cpl <= 0:
+        raise ValidationError(EXIT_SCHEMA, f"{source}.readable_measure_rule.target_cpl: must be a positive integer")
+    referenced = by_id[font_pack_artifact]
+    if referenced.get("kind") != "font_pack":
+        raise ValidationError(EXIT_SCHEMA, f"{artifact['id']}.font_pack_artifact: must reference a font_pack")
+    referenced_payload = load_json_artifact(
+        resolve_project_path(root, referenced.get("path", ""), f"{font_pack_artifact}.path"),
+        f"{font_pack_artifact}.path",
+    )
+    if referenced_payload.get("font_pack_id") != font_pack_id:
+        raise ValidationError(
+            EXIT_SCHEMA,
+            f"{source}.font_pack_id: must match the referenced font pack artifact",
+        )
+
+
 def artifacts_by_id(manifest: dict) -> dict[str, dict]:
     artifacts = manifest.get("artifacts")
     if not isinstance(artifacts, list) or not artifacts:
@@ -202,6 +269,26 @@ def validate_static_artifacts(root: Path, by_id: dict[str, dict], checkout_overr
                 value = artifact.get(field)
                 if not isinstance(value, int) or value <= 0:
                     raise ValidationError(EXIT_SCHEMA, f"{artifact_id}.{field}: must be a positive integer")
+        elif kind == "font_pack":
+            path = artifact.get("path")
+            if not isinstance(path, str):
+                raise ValidationError(EXIT_SCHEMA, f"{artifact_id}.path: must be a string")
+            payload = load_json_artifact(
+                resolve_project_path(root, path, f"{artifact_id}.path"),
+                f"{artifact_id}.path",
+            )
+            validate_font_pack_payload(root, payload, artifact_id)
+            resolved[artifact_id] = root / path
+        elif kind == "reading_preset":
+            path = artifact.get("path")
+            if not isinstance(path, str):
+                raise ValidationError(EXIT_SCHEMA, f"{artifact_id}.path: must be a string")
+            payload = load_json_artifact(
+                resolve_project_path(root, path, f"{artifact_id}.path"),
+                f"{artifact_id}.path",
+            )
+            validate_reading_preset_payload(root, payload, artifact, by_id, artifact_id)
+            resolved[artifact_id] = root / path
         elif kind == "capture_schema":
             root_path = resolve_project_path(root, artifact.get("root", ""), f"{artifact_id}.root")
             require_path_exists(root_path, f"{artifact_id}.root")

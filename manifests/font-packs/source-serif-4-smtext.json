@@ -1,0 +1,40 @@
+{
+  "font_pack_id": "source-serif-4-smtext",
+  "display_name": "Source Serif 4 SmText",
+  "license": "SIL Open Font License 1.1",
+  "source": {
+    "repository": "https://github.com/adobe-fonts/source-serif",
+    "ref": "release"
+  },
+  "roles": [
+    {
+      "role": "body_regular",
+      "path": "assets/fonts/source-serif-4-smtext/SourceSerif4SmText-Regular.ttf",
+      "koreader_face": "Source Serif 4 SmText",
+      "sha256": "54379656e8fa22bfbb7a783f8fe4269c9ae4eb966c1c3fcb17ee3b50cba95813"
+    },
+    {
+      "role": "body_italic",
+      "path": "assets/fonts/source-serif-4-smtext/SourceSerif4SmText-It.ttf",
+      "koreader_face": "Source Serif 4 SmText",
+      "sha256": "74963111a9dc458611e6eaa62a6bff8811855f67e015f91b728fb52567020c5e"
+    },
+    {
+      "role": "body_bold",
+      "path": "assets/fonts/source-serif-4-smtext/SourceSerif4SmText-Bold.ttf",
+      "koreader_face": "Source Serif 4 SmText",
+      "sha256": "072c77a0dbffbcb7e99dda31de16e096bd99d1345fd6037d3e153ea315547c25"
+    },
+    {
+      "role": "body_bold_italic",
+      "path": "assets/fonts/source-serif-4-smtext/SourceSerif4SmText-BoldIt.ttf",
+      "koreader_face": "Source Serif 4 SmText",
+      "sha256": "0a0828eb760127b4ff1e6d01852465fdce05ceff99a1a5f5b01f4f1ef1633f0d"
+    }
+  ],
+  "runtime_fallback": {
+    "font_pack_id": "koreader-bundled-noto-serif",
+    "koreader_face": "Noto Serif",
+    "measurement_font": "NotoSerif-Regular.ttf"
+  }
+}
