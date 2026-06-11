@@ -125,6 +125,51 @@ describe("Bookshelf discover", function()
         assert.equals(0, #rails[1].entries)
     end)
 
+    it("carries href and rows on rails for the shelf-detail surface", function()
+        local fake = setmetatable({}, { __index = DiscoverUI })
+        local rails = DiscoverUI._railsFromSnapshot(fake, {
+            rails = {
+                { key = "shelf:/opds/shelf/8", title = "Learning Japanese",
+                  href = "http://lib.example/opds/shelf/8", rows = {
+                    { title = "それから", catalog_id = "/opds/download/401/epub/" },
+                } },
+            },
+        })
+        assert.equals("http://lib.example/opds/shelf/8", rails[1].href)
+        assert.equals(1, #rails[1].rows)
+        assert.equals(1, #rails[1].entries)
+    end)
+
+    it("shelf detail seeds from snapshot rows and pages vertically", function()
+        local ShelfDetailUI = DiscoverUI.ShelfDetailUI
+        assert.equals("nav_discover", ShelfDetailUI.active_nav_tab)
+
+        local UIManager = require("ui/uimanager")
+        local dirty = 0
+        local old_set_dirty = UIManager.setDirty
+        finally(function()
+            UIManager.setDirty = old_set_dirty
+        end)
+        UIManager.setDirty = function()
+            dirty = dirty + 1
+        end
+
+        local fake = setmetatable({
+            _page = 1,
+            _pages = 2,
+            rail_regions = {},
+            dimen = {},
+        }, { __index = ShelfDetailUI })
+
+        assert.is_true(ShelfDetailUI.onSwipe(fake, nil, { direction = "north" }))
+        assert.equals(2, fake._page)
+        assert.equals(1, dirty)
+        -- clamped at the last page
+        assert.is_true(ShelfDetailUI.onSwipe(fake, nil, { direction = "north" }))
+        assert.equals(2, fake._page)
+        assert.equals(1, dirty)
+    end)
+
     it("pages the rail stack with vertical swipes and clamps at the edges", function()
         local UIManager = require("ui/uimanager")
         local dirty = 0
@@ -242,6 +287,63 @@ describe("Bookshelf discover", function()
             ui = { document = nil },
         }, { __index = Bookshelf })
         assert.is_nil(Bookshelf.downloadedPath(pruned, "/opds/cover/306"))
+
+        os.remove(settings_file)
+    end)
+
+    it("removes a download, retiring every key that points at the path", function()
+        local settings_file = "/tmp/bookshelf-discover-remove-spec.lua"
+        os.remove(settings_file)
+        local plugin = setmetatable({
+            settings_file = settings_file,
+            ui = { document = nil },
+        }, { __index = Bookshelf })
+
+        local epub = "/tmp/bookshelf-discover-remove-spec.epub"
+        local f = io.open(epub, "w")
+        f:write("x")
+        f:close()
+
+        -- the same path reachable under a legacy and a current key
+        Bookshelf.recordDownload(plugin, "/opds/cover/305", epub)
+        Bookshelf.recordDownload(plugin, "/opds/download/305/epub/", epub)
+
+        -- reverse lookup finds a key for the file (either of the two)
+        assert.is_truthy(Bookshelf.catalogIdForFile(plugin, epub))
+        assert.is_nil(Bookshelf.catalogIdForFile(plugin, "/tmp/elsewhere.epub"))
+
+        local removed = Bookshelf.removeDownload(plugin, "/opds/download/305/epub/")
+        assert.equals(epub, removed)
+        -- the file is gone and BOTH keys retired
+        assert.is_nil(io.open(epub, "r"))
+        assert.is_nil(Bookshelf.downloadedPath(plugin, "/opds/download/305/epub/"))
+        assert.is_nil(Bookshelf.downloadedPath(plugin, "/opds/cover/305"))
+        assert.is_nil(Bookshelf.catalogIdForFile(plugin, epub))
+
+        -- removing an unknown id is a quiet no-op
+        assert.is_nil(Bookshelf.removeDownload(plugin, "/opds/download/999/epub/"))
+
+        os.remove(settings_file)
+    end)
+
+    it("persists ui preferences across plugin instances", function()
+        local settings_file = "/tmp/bookshelf-discover-prefs-spec.lua"
+        os.remove(settings_file)
+        local plugin = setmetatable({
+            settings_file = settings_file,
+            ui = { document = nil },
+        }, { __index = Bookshelf })
+
+        assert.is_nil(Bookshelf.uiPref(plugin, "library_sort"))
+        Bookshelf.saveUiPref(plugin, "library_sort", "title")
+        Bookshelf.saveUiPref(plugin, "library_filter_status", "reading")
+
+        local reloaded = setmetatable({
+            settings_file = settings_file,
+            ui = { document = nil },
+        }, { __index = Bookshelf })
+        assert.equals("title", Bookshelf.uiPref(reloaded, "library_sort"))
+        assert.equals("reading", Bookshelf.uiPref(reloaded, "library_filter_status"))
 
         os.remove(settings_file)
     end)

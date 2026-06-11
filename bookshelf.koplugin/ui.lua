@@ -71,6 +71,32 @@ local RailTokens = {
     recent_full_count = 6,
 }
 
+-- Book panel cover box (dialog domain: DPI-scaled via scaleBySize, not
+-- shelf_scale) — 2:3, sized between the small and large card covers
+local PanelTokens = {
+    cover_w = 132,
+    cover_h = 184,
+}
+
+-- All-books view preferences. Sort keys map onto the provider's sort
+-- fields; status keys onto the provider's record.status values.
+local SORT_OPTIONS = {
+    { key = "recent", label = _("Recent") },
+    { key = "title", label = _("Title") },
+    { key = "authors", label = _("Author") },
+}
+local STATUS_OPTIONS = {
+    { key = "all", label = _("All") },
+    { key = "reading", label = _("Reading") },
+    { key = "new", label = _("Unread") },
+    { key = "complete", label = _("Finished") },
+}
+-- display names for the language filter; unknown tags show as-is
+local LANGUAGE_NAMES = {
+    en = _("English"),
+    ja = "日本語",
+}
+
 local IconTokens = {
     visual = 24,
     tap = 40,
@@ -420,10 +446,14 @@ function LibraryUI:_normalizeContinueEntry(entry)
     if type(entry) ~= "table" then
         return nil
     end
-    if not entry.current and self:_isCurrentFile(entry.file or entry.path) then
+    local file = entry.file or entry.path
+    if not entry.current and self:_isCurrentFile(file) then
         entry = util.tableDeepCopy(entry)
         entry.current = true
         entry.mandatory = _("Reading")
+    elseif file and lfs.attributes(file, "mode") ~= "file" then
+        -- a removed book must not keep advertising itself as the hero
+        return nil
     end
     return entry
 end
@@ -452,7 +482,7 @@ end
 
 function LibraryUI:_lastFileEntry()
     local file = G_reader_settings:readSetting("lastfile")
-    if not file then
+    if not file or lfs.attributes(file, "mode") ~= "file" then
         return nil
     end
     return {
@@ -721,12 +751,267 @@ function LibraryUI:_showDictionaryLookup()
     self:_showInfo(_("Dictionary lookup is unavailable."))
 end
 
-function LibraryUI:_showFilter()
-    self:_showInfo(_("Sort and filter controls are not configured yet."))
+-- the primary language subtag: "en-US" -> "en", "ja" -> "ja"
+local function languageTag(value)
+    if type(value) ~= "string" then
+        return nil
+    end
+    return value:lower():match("^%a%a%a?")
 end
 
+function LibraryUI:_uiPref(key, fallback)
+    local value = self.plugin and self.plugin:uiPref(key)
+    if value == nil then
+        return fallback
+    end
+    return value
+end
+
+function LibraryUI:_saveUiPref(key, value)
+    if self.plugin then
+        self.plugin:saveUiPref(key, value)
+    end
+    self:_invalidateLibraryCache()
+    UIManager:setDirty(self, "ui", self.dimen)
+end
+
+function LibraryUI:_librarySortKey()
+    local key = self:_uiPref("library_sort", "recent")
+    for _i, option in ipairs(SORT_OPTIONS) do
+        if option.key == key then
+            return key, option.label
+        end
+    end
+    return "recent", SORT_OPTIONS[1].label
+end
+
+-- In-place view sort over the provider's precomputed sort fields, with
+-- display-field fallbacks for entries that did not come from the provider
+-- (e.g. the continue entry). "recent" keeps the provider's order.
+function LibraryUI:_applyLibrarySort(entries, key)
+    if key == "recent" then
+        return entries
+    end
+    -- raw fields only: _entryTitle/_entryAuthor return DISPLAY strings
+    -- (BiDi-isolate wrapped), whose control bytes sort after every letter
+    local function titleKey(entry)
+        if entry.sort_title then
+            return entry.sort_title
+        end
+        local raw = entry.display_title or entry.title or entry.text or entry.name
+        return type(raw) == "string" and raw:lower() or ""
+    end
+    local function authorKey(entry)
+        if entry.sort_authors then
+            return entry.sort_authors
+        end
+        local raw = entry.authors or entry.author
+        return type(raw) == "string" and raw:lower() or ""
+    end
+    if key == "title" then
+        table.sort(entries, function(a, b)
+            local ta, tb = titleKey(a), titleKey(b)
+            if ta ~= tb then
+                return ta < tb
+            end
+            return authorKey(a) < authorKey(b)
+        end)
+    elseif key == "authors" then
+        table.sort(entries, function(a, b)
+            local aa, ab = authorKey(a), authorKey(b)
+            if aa ~= ab then
+                -- authorless entries sort last, not first
+                if aa == "" or ab == "" then
+                    return ab == ""
+                end
+                return aa < ab
+            end
+            return titleKey(a) < titleKey(b)
+        end)
+    end
+    return entries
+end
+
+function LibraryUI:_entryMatchesFilter(entry, status_key, language_key)
+    if status_key and status_key ~= "all" then
+        if (entry.status or "new") ~= status_key then
+            return false
+        end
+    end
+    if language_key and language_key ~= "all" then
+        if languageTag(entry.language) ~= language_key then
+            return false
+        end
+    end
+    return true
+end
+
+-- The All books shelf's view: the library filtered and sorted per the
+-- persisted preferences. Search and the other shelves stay unfiltered.
+function LibraryUI:_allBooksEntries()
+    local cache = self:_libraryCache()
+    if cache.all_books_entries then
+        return cache.all_books_entries
+    end
+    local status_key = self:_uiPref("library_filter_status", "all")
+    local language_key = self:_uiPref("library_filter_language", "all")
+    local entries = {}
+    for _i, entry in ipairs(self:_libraryEntries()) do
+        if self:_entryMatchesFilter(entry, status_key, language_key) then
+            table.insert(entries, entry)
+        end
+    end
+    self:_applyLibrarySort(entries, (self:_librarySortKey()))
+    cache.all_books_entries = entries
+    return entries
+end
+
+-- distinct language tags across the library, for the filter dialog
+function LibraryUI:_libraryLanguages()
+    local seen, tags = {}, {}
+    for _i, entry in ipairs(self:_libraryEntries()) do
+        local tag = languageTag(entry.language)
+        if tag and not seen[tag] then
+            seen[tag] = true
+            table.insert(tags, tag)
+        end
+    end
+    table.sort(tags)
+    return tags
+end
+
+-- The language rows for the filter dialog. A saved filter must always be
+-- visible and resettable here — even when no book on the device carries
+-- its tag any more — or a stale pref strands All books at "0 of N" with
+-- no in-UI way out.
+function LibraryUI:_languageFilterChoices()
+    local languages = self:_libraryLanguages()
+    local current = self:_uiPref("library_filter_language", "all")
+    if #languages == 0 and current == "all" then
+        return {} -- nothing to filter by and nothing active: no section
+    end
+    local choices = {
+        { key = "all", label = _("All languages"), selected = current == "all" },
+    }
+    local has_current = current == "all"
+    for _i, tag in ipairs(languages) do
+        table.insert(choices, {
+            key = tag,
+            label = LANGUAGE_NAMES[tag] or tag,
+            selected = tag == current,
+        })
+        if tag == current then
+            has_current = true
+        end
+    end
+    if not has_current then
+        -- the active filter's language is absent from the device library:
+        -- show it anyway, checkmarked, so the empty shelf explains itself
+        table.insert(choices, {
+            key = current,
+            label = LANGUAGE_NAMES[current] or current,
+            selected = true,
+        })
+    end
+    return choices
+end
+
+local function choiceLabel(selected, label)
+    -- trailing checkmark, the stock dialog convention
+    return selected and (label .. "  ✓") or label
+end
+
+function LibraryUI:_showSortDialog()
+    local ButtonDialog = require("ui/widget/buttondialog")
+    local current = self:_librarySortKey()
+    local dialog
+    local buttons = {}
+    for _i, option in ipairs(SORT_OPTIONS) do
+        table.insert(buttons, {{
+            text = choiceLabel(option.key == current, option.label),
+            callback = function()
+                UIManager:close(dialog)
+                self:_saveUiPref("library_sort", option.key)
+            end,
+        }})
+    end
+    dialog = ButtonDialog:new{
+        width_factor = 0.6,
+        buttons = buttons,
+    }
+    UIManager:show(dialog)
+end
+
+function LibraryUI:_showFilter()
+    local ButtonDialog = require("ui/widget/buttondialog")
+    local status_current = self:_uiPref("library_filter_status", "all")
+    local dialog
+    local buttons = {}
+    for _i, option in ipairs(STATUS_OPTIONS) do
+        table.insert(buttons, {{
+            text = choiceLabel(option.key == status_current, option.label),
+            callback = function()
+                UIManager:close(dialog)
+                self:_saveUiPref("library_filter_status", option.key)
+            end,
+        }})
+    end
+    local choices = self:_languageFilterChoices()
+    if #choices > 0 then
+        table.insert(buttons, {}) -- separator: status above, language below
+        for _i, choice in ipairs(choices) do
+            local key = choice.key
+            table.insert(buttons, {{
+                text = choiceLabel(choice.selected, choice.label),
+                callback = function()
+                    UIManager:close(dialog)
+                    self:_saveUiPref("library_filter_language", key)
+                end,
+            }})
+        end
+    end
+    dialog = ButtonDialog:new{
+        width_factor = 0.6,
+        buttons = buttons,
+    }
+    UIManager:show(dialog)
+end
+
+-- The library-level actions behind the page header's kebab. Real actions
+-- only: refresh re-derives the shelves and kicks cover extraction; the
+-- catalog manager is the stock OPDS server UI — the on-device way to set
+-- the server address and credentials.
 function LibraryUI:_showMore()
-    self:_showInfo(_("Library actions are not configured yet."))
+    local ButtonDialog = require("ui/widget/buttondialog")
+    local dialog
+    dialog = ButtonDialog:new{
+        width_factor = 0.6,
+        buttons = {
+            {{
+                text = _("Refresh library"),
+                callback = function()
+                    UIManager:close(dialog)
+                    self:_refreshLibrary()
+                end,
+            }},
+            {{
+                text = _("Manage catalog"),
+                callback = function()
+                    UIManager:close(dialog)
+                    self:_addBooks()
+                end,
+            }},
+        },
+    }
+    UIManager:show(dialog)
+end
+
+function LibraryUI:_refreshLibrary()
+    self:_invalidateLibraryCache()
+    self:_triggerBackgroundExtraction()
+    UIManager:setDirty(self, "ui", self.dimen)
+    local Notification = require("ui/widget/notification")
+    UIManager:show(Notification:new{ text = _("Library refreshed") })
 end
 
 function LibraryUI:_showFiles(path)
@@ -799,6 +1084,203 @@ function LibraryUI:_continue()
     else
         self:_openEntry(entry)
     end
+end
+
+-- The book's local file, verified: catalog entries resolve through the
+-- live download map (which re-stats), local entries stat their own file —
+-- a stale card never offers actions for a book that is already gone.
+function LibraryUI:_entryLocalPath(entry)
+    if entry.catalog_id and self.plugin then
+        local path = self.plugin:downloadedPath(entry.catalog_id)
+        if path then
+            return path
+        end
+    end
+    local file = entry.file or entry.path
+    if type(file) == "string" and lfs.attributes(file, "mode") == "file" then
+        return file
+    end
+end
+
+-- The book panel: every card kebab's destination, and the tap target on
+-- catalog surfaces. One component, actions by state: remote books offer
+-- Read now / Add to device; on-device catalog-linked books offer Remove
+-- from device; sideloaded books offer the stock permanent Delete.
+function LibraryUI:_showBookPanel(entry)
+    local ButtonDialog = require("ui/widget/buttondialog")
+    local HorizontalGroup = require("ui/widget/horizontalgroup")
+    local HorizontalSpan = require("ui/widget/horizontalspan")
+    local ImageWidget = require("ui/widget/imagewidget")
+    local Size = require("ui/size")
+    local VerticalGroup = require("ui/widget/verticalgroup")
+    local VerticalSpan = require("ui/widget/verticalspan")
+
+    local local_path = self:_entryLocalPath(entry)
+    local reading = entry.current or entry.status == "reading"
+
+    local dialog
+    local buttons = {
+        {{
+            text = reading and _("Continue reading") or _("Read now"),
+            callback = function()
+                UIManager:close(dialog)
+                if entry.current then
+                    -- the book is already open beneath the bookshelf
+                    self:closeBookshelf("full")
+                elseif local_path then
+                    self:_openEntry({ file = local_path })
+                elseif entry.catalog_id and self._downloadEntry then
+                    self:_downloadEntry(entry, function(path)
+                        self:_openEntry({ file = path })
+                    end)
+                else
+                    self:_showInfo(T(_("Book not found: %1"),
+                        BD.filepath(entry.file or entry.path or "?")))
+                end
+            end,
+        }},
+    }
+    if not local_path and entry.catalog_id and self._downloadEntry then
+        table.insert(buttons, {{
+            text = _("Add to device"),
+            callback = function()
+                UIManager:close(dialog)
+                self:_downloadEntry(entry)
+            end,
+        }})
+    end
+    if local_path then
+        -- linkage, not membership: the download map records what this
+        -- plugin fetched; anything else (including stock-OPDS downloads
+        -- from the same server) gets the honest permanent-delete flow
+        local catalog_id = entry.catalog_id
+        if not (catalog_id and self.plugin and self.plugin:downloadedPath(catalog_id)) then
+            catalog_id = self.plugin and self.plugin:catalogIdForFile(local_path) or nil
+        end
+        table.insert(buttons, {}) -- separator: removal never neighbors reading
+        if catalog_id then
+            table.insert(buttons, {{
+                text = _("Remove from device"),
+                enabled = not entry.current,
+                callback = function()
+                    UIManager:close(dialog)
+                    self:_confirmRemoveFromDevice(entry, catalog_id)
+                end,
+            }})
+        else
+            table.insert(buttons, {{
+                text = _("Delete"),
+                enabled = not entry.current,
+                callback = function()
+                    UIManager:close(dialog)
+                    self:_confirmDeleteLocal(entry, local_path)
+                end,
+            }})
+        end
+    end
+
+    dialog = ButtonDialog:new{
+        width_factor = 0.8,
+        buttons = buttons,
+    }
+
+    local avail_w = dialog:getAddedWidgetAvailableWidth()
+    local box_w = Screen:scaleBySize(PanelTokens.cover_w)
+    local box_h = Screen:scaleBySize(PanelTokens.cover_h)
+    local cover = self:_cachedCoverFor(entry, box_w, box_h)
+    if not cover and entry.catalog_id then
+        -- serve the rail-size bb instead of queueing a second fetch for the
+        -- panel-size key; in a 0.8-width dialog the size difference is fine
+        local prefix = "catalog:" .. entry.catalog_id .. "|"
+        for key, value in pairs(self.cover_cache or {}) do
+            if type(value) == "table" and key:sub(1, #prefix) == prefix then
+                cover = value
+                break
+            end
+        end
+    end
+    local cover_widget = cover and ImageWidget:new{
+        image = cover.bb,
+        image_disposable = false, -- the bb belongs to cover_cache
+        width = cover.w,
+        height = cover.h,
+    } or nil
+    local text_w = avail_w - (cover and (cover.w + Size.padding.large) or 0)
+    local text_col = VerticalGroup:new{
+        align = "left",
+        TextBoxWidget:new{
+            text = self:_entryTitle(entry) or _("Untitled"),
+            face = Font:getFace("smalltfont"),
+            width = text_w,
+        },
+        VerticalSpan:new{ width = Size.padding.small },
+        TextBoxWidget:new{
+            text = self:_entryAuthor(entry) or "",
+            face = Font:getFace("smallinfofont"),
+            width = text_w,
+        },
+    }
+    local header = HorizontalGroup:new{
+        align = "top",
+        not_focusable = true, -- dpad focus stays on the buttons
+        parent = dialog,      -- survives reinit's free pass
+    }
+    if cover_widget then
+        table.insert(header, cover_widget)
+        table.insert(header, HorizontalSpan:new{ width = Size.padding.large })
+    end
+    table.insert(header, text_col)
+
+    dialog:addWidget(header) -- exactly one addWidget call
+    UIManager:show(dialog)
+end
+
+function LibraryUI:_confirmRemoveFromDevice(entry, catalog_id)
+    local ConfirmBox = require("ui/widget/confirmbox")
+    UIManager:show(ConfirmBox:new{
+        -- every clause is plugin-verifiable: the file action, and the kept
+        -- sidecar. No promises about the server or re-downloading.
+        text = T(_("Remove \"%1\" from this device?\n\nThe downloaded file will be removed. Reading progress stays on this device."),
+            self:_entryTitle(entry) or _("Untitled")),
+        ok_text = _("Remove"),
+        ok_callback = function()
+            local path = self.plugin and self.plugin:removeDownload(catalog_id)
+            if not path then
+                self:_showInfo(_("This book could not be removed."))
+                return
+            end
+            local BookList = require("ui/widget/booklist")
+            BookList.resetBookInfoCache(path)
+            local ReadHistory = require("readhistory")
+            ReadHistory:fileDeleted(path)
+            self:_afterLocalRemoval(entry)
+            local Notification = require("ui/widget/notification")
+            UIManager:show(Notification:new{ text = _("Removed from device") })
+        end,
+    })
+end
+
+-- Sideloaded books get KOReader's own permanent-delete flow (stock copy,
+-- sidecar purge, history/collection cleanup). deleteFile's file branch is
+-- instance-free, so the class table serves when no FileManager is open.
+function LibraryUI:_confirmDeleteLocal(entry, file)
+    local FileManager = require("apps/filemanager/filemanager")
+    local fm = FileManager.instance or FileManager
+    fm:showDeleteFileDialog(file, function()
+        self:_afterLocalRemoval(entry)
+        local Notification = require("ui/widget/notification")
+        UIManager:show(Notification:new{ text = _("Deleted from device") })
+    end)
+end
+
+-- Shared post-removal bookkeeping. Deliberately does NOT purge the .sdr
+-- sidecar on the Remove path: sidecars reattach by path and re-downloads
+-- land at the same path, so reading progress survives remove/re-add.
+function LibraryUI:_afterLocalRemoval(entry)
+    entry.file = nil -- stale zone closures must not offer a gone file
+    entry.path = nil
+    self:_invalidateLibraryCache()
+    UIManager:setDirty(self, "ui", self.dimen)
 end
 
 function LibraryUI:_addBooks()
@@ -1518,7 +2000,7 @@ function LibraryUI:_paintBookCard(bb, entry, slot, id, options)
         end, options.clip_rect)
         self:_zone(id .. "_menu", Geom:new{x = slot.menu.x - self:_px(8), y = slot.menu.y - self:_px(8),
             w = slot.menu.w + self:_px(16), h = slot.menu.h + self:_px(16)}, function()
-            self:_showMore()
+            self:_showBookPanel(entry)
         end, options.clip_rect)
     end
 end
@@ -1706,7 +2188,12 @@ function LibraryUI:_paintContinueCard(bb, entry, x, y, w, h)
             TypeScale.category,
             BookTextTokens.title_line_height,
             1)
-        local available = meta_top - self:_px(Space.m) - snippet_y
+        -- the chapter the snippet quotes, as a quiet attribution line;
+        -- reserve its height before sizing the snippet box
+        local chapter = entry and entry.resume_chapter
+        local has_chapter = type(chapter) == "string" and chapter ~= ""
+        local attribution_h = has_chapter and self:_px(20) or 0
+        local available = meta_top - self:_px(Space.m) - snippet_y - attribution_h
         local lines = math.min(3, math.floor(available / line_metrics.line_h))
         if lines >= 1 then
             self:_paintTextBox(bb, "“" .. snippet .. "”", text_x, snippet_y, text_w, {
@@ -1717,6 +2204,15 @@ function LibraryUI:_paintContinueCard(bb, entry, x, y, w, h)
                 height_adjust = true,
                 line_height = BookTextTokens.title_line_height,
             })
+            if has_chapter then
+                self:_paintText(bb, "— " .. chapter,
+                    text_x, snippet_y + lines * line_metrics.line_h + self:_px(4), {
+                        face = FontTokens.sans,
+                        size = TypeScale.card_meta,
+                        color = Blitbuffer.COLOR_DARK_GRAY,
+                        max_width = text_w,
+                    })
+            end
         end
     end
 
@@ -1726,7 +2222,7 @@ function LibraryUI:_paintContinueCard(bb, entry, x, y, w, h)
     end)
     self:_zone("continue_card_menu", Geom:new{x = menu_x - self:_px(Space.s), y = y + pad - self:_px(Space.s),
         w = menu_size + self:_px(Space.l), h = menu_size + self:_px(Space.l)}, function()
-        self:_showMore()
+        self:_showBookPanel(entry)
     end)
 
     return h
@@ -2022,9 +2518,14 @@ function LibraryUI:_paintRecentlyAdded(bb, x, y, w)
 end
 
 function LibraryUI:_paintAllBooks(bb, x, y, w, h)
-    local entries = self:_libraryEntries()
+    local entries = self:_allBooksEntries()
     local count = #entries
-    local count_text = T(N_("%1 item", "%1 items", count), count)
+    local total = #self:_libraryEntries()
+    -- a filtered shelf must never be invisible: the count says so
+    local count_text = count == total
+        and T(N_("%1 item", "%1 items", count), count)
+        or T(_("%1 of %2"), count, total)
+    local sort_label = select(2, self:_librarySortKey())
     local metrics = self:_allBooksRailMetrics()
     local header_x = x + metrics.outer
     local header_w = w - metrics.outer * 2
@@ -2035,7 +2536,7 @@ function LibraryUI:_paintAllBooks(bb, x, y, w, h)
         controls = {
             {
                 label = _("Sort:"),
-                value = _("Recent"),
+                value = sort_label,
                 width = self:_px(112),
             },
         },
@@ -2044,7 +2545,7 @@ function LibraryUI:_paintAllBooks(bb, x, y, w, h)
         w = header_w,
         id = "all_books_header",
         callback = function()
-            self:_showFilter()
+            self:_showSortDialog()
         end,
     })
 
