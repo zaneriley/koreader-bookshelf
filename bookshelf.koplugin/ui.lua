@@ -25,22 +25,50 @@ local plugin_dir = source:match("^@(.+)/[^/]+$") or "plugins/bookshelf.koplugin"
 local GridLayout = dofile(plugin_dir .. "/gridlayout.lua")
 local Icons = dofile(plugin_dir .. "/icons.lua")
 
+-- Prefer the chosen reading face for the shelf's serif voice when it is
+-- installed (user fonts dir), so the library home matches the book pages;
+-- degrade to the bundled face otherwise.
+local function resolveFace(preferred, fallback)
+    local ok, face = pcall(Font.getFace, Font, preferred, 16)
+    if ok and face then
+        return preferred
+    end
+    return fallback
+end
+
+local serif_face = resolveFace("SourceSerif4SmText-Regular.ttf", "NotoSerif-Regular.ttf")
+local serif_italic_face = resolveFace("SourceSerif4SmText-It.ttf", "NotoSerif-Italic.ttf")
+
 local FontTokens = {
-    display = "NotoSerif-Regular.ttf",
-    display_italic = "NotoSerif-Italic.ttf",
-    serif_safe = "NotoSerif-Regular.ttf",
+    display = serif_face,
+    display_italic = serif_italic_face,
+    serif_safe = serif_face,
     sans = "NotoSans-Regular.ttf",
     sans_bold = "NotoSans-Bold.ttf",
 }
 
 local TypeScale = {
-    book_meta_small = 9,
-    book_meta_large = 10,
-    book_title_small = 11,
-    book_title_large = 12,
+    card_meta = 10,
+    card_title = 12,
     category = 13,
-    control = 13,
+    hero_title = 20,
     page_title = 38,
+}
+
+-- Spacing ladder: every gap in the shelf system is one of these steps.
+local Space = {
+    xs = 4,
+    s = 8,
+    m = 12,
+    l = 16,
+    xl = 24,
+}
+
+-- Rail grammar: a half cover sliced at the edge means "more books, swipe".
+-- Recently added shows a chosen count; all books shows what the width fits.
+local RailTokens = {
+    peek = 0.5,
+    recent_full_count = 6,
 }
 
 local IconTokens = {
@@ -50,12 +78,12 @@ local IconTokens = {
 
 local LayoutTokens = {
     page_top = 16,
-    status_to_title = 34,
+    status_to_title = 32,
     title_block = 72,
     title_to_shelves = 24,
-    category_header = 30,
+    category_header = 32,
     shelf_body_gap = 12,
-    continue_to_lower_gap = 28,
+    continue_to_lower_gap = 32,
     lower_shelf_gap = 32,
     lower_bottom_margin = 16, -- unscaled_size_check: ignore
     empty_home_offset = 64,
@@ -103,22 +131,39 @@ local LibraryUI = InputContainer:extend{
     pressed_zone_id = nil,
 }
 
+-- Exposed for specs: face resolution depends on which fonts are installed.
+LibraryUI._font_tokens = FontTokens
+
 function LibraryUI:_triggerBackgroundExtraction()
     local manager = self:_bookInfoManager()
     if not manager then return end
-    
+
+    local cover_specs = self:_coverSpecs()
     local to_extract = {}
     local entries = self:_libraryEntries()
     for _, entry in ipairs(entries) do
         local file = self:_entryFile(entry)
         if file then
             local ok, bookinfo = pcall(manager.getBookInfo, manager, file, false)
-            if not ok or type(bookinfo) ~= "table" or bookinfo.has_cover == nil then
-                table.insert(to_extract, { filepath = file, cover_specs = nil })
+            local should_extract = false
+            if not ok or type(bookinfo) ~= "table" then
+                should_extract = true
+            elseif tonumber(bookinfo.in_progress) and tonumber(bookinfo.in_progress) > 0 then
+                should_extract = false
+            elseif not bookinfo.ignore_cover then
+                if not bookinfo.cover_fetched then
+                    should_extract = true
+                elseif bookinfo.has_cover and manager.isCachedCoverInvalid
+                    and manager.isCachedCoverInvalid(bookinfo, cover_specs) then
+                    should_extract = true
+                end
+            end
+            if should_extract then
+                table.insert(to_extract, { filepath = file, cover_specs = cover_specs })
             end
         end
     end
-    
+
     if #to_extract > 0 then
         logger.info("Bookshelf triggering background extraction for", #to_extract, "books")
         UIManager:nextTick(function()
@@ -186,7 +231,9 @@ end
 
 function LibraryUI:onShowFileManager()
     self:closeBookshelf("full")
-    return true
+    -- Let the explicit File browser event continue to the Reader/FileManager
+    -- underneath. Library is only an overlay participant here.
+    return false
 end
 
 function LibraryUI:_providerOptions()
@@ -214,6 +261,15 @@ function LibraryUI:_providerCall(method, ...)
     end
     logger.warn("Bookshelf provider method failed:", method, result)
     return nil
+end
+
+function LibraryUI:_libraryCache()
+    self._library_cache = self._library_cache or {}
+    return self._library_cache
+end
+
+function LibraryUI:_invalidateLibraryCache()
+    self._library_cache = {}
 end
 
 function LibraryUI:_providerList(...)
@@ -301,12 +357,19 @@ function LibraryUI:_entryTitle(entry)
     return self:_fileTitle(entry.file or entry.path)
 end
 
+local function joinAuthorLines(value)
+    if type(value) ~= "string" then
+        return value
+    end
+    return (value:gsub("%s*\n%s*", ", "))
+end
+
 function LibraryUI:_entryAuthor(entry)
     if type(entry) ~= "table" then
         return nil
     end
-    return self:_cleanDisplayTitle(entry.authors)
-        or self:_cleanDisplayTitle(entry.author)
+    return self:_cleanDisplayTitle(joinAuthorLines(entry.authors))
+        or self:_cleanDisplayTitle(joinAuthorLines(entry.author))
         or self:_cleanDisplayTitle(entry.subtitle)
         or self:_cleanDisplayTitle(entry.series)
 end
@@ -400,13 +463,24 @@ function LibraryUI:_lastFileEntry()
 end
 
 function LibraryUI:_continueEntry()
-    return self:_normalizeContinueEntry(self:_providerEntry("getContinue", "getContinueItem", "getLastReading"))
+    local cache = self:_libraryCache()
+    if cache.continue_entry ~= nil then
+        return cache.continue_entry or nil
+    end
+    local entry = self:_normalizeContinueEntry(self:_providerEntry("getContinue", "getContinueItem", "getLastReading"))
         or self:_currentDocumentEntry()
         or self:_lastFileEntry()
+    cache.continue_entry = entry or false
+    return entry
 end
 
 function LibraryUI:_downloadedEntries()
-    return self:_providerList("getDownloaded", "getDownloadedItems", "getDownloadedBooks")
+    local cache = self:_libraryCache()
+    if cache.downloaded_entries then
+        return cache.downloaded_entries
+    end
+    cache.downloaded_entries = self:_providerList("getDownloaded", "getDownloadedItems", "getDownloadedBooks")
+    return cache.downloaded_entries
 end
 
 function LibraryUI:_uniqueEntries(entries)
@@ -423,6 +497,10 @@ function LibraryUI:_uniqueEntries(entries)
 end
 
 function LibraryUI:_libraryEntries()
+    local cache = self:_libraryCache()
+    if cache.library_entries then
+        return cache.library_entries
+    end
     local entries = {}
     local continue = self:_continueEntry()
     if continue then
@@ -431,14 +509,21 @@ function LibraryUI:_libraryEntries()
     for _, entry in ipairs(self:_downloadedEntries()) do
         table.insert(entries, entry)
     end
-    return self:_uniqueEntries(entries)
+    entries = self:_uniqueEntries(entries)
+    cache.library_entries = entries
+    return entries
 end
 
 function LibraryUI:_recentlyAddedEntries()
+    local cache = self:_libraryCache()
+    if cache.recently_added_entries then
+        return cache.recently_added_entries
+    end
     local entries = self:_providerList("getRecentlyAdded", "getRecentBooks", "getNewBooks")
     if #entries == 0 then
         entries = self:_libraryEntries()
     end
+    cache.recently_added_entries = entries
     return entries
 end
 
@@ -455,23 +540,175 @@ function LibraryUI:_dictionary()
     return nil
 end
 
-function LibraryUI:_opds()
-    if not self.ui then
-        return nil
-    end
-    if self.ui.opds then
-        return self.ui.opds
-    end
-    if type(self.ui.getOPDS) == "function" then
-        return self.ui:getOPDS()
-    end
-    return nil
-end
-
 function LibraryUI:_showInfo(text)
     UIManager:show(InfoMessage:new{
         text = text,
     })
+end
+
+function LibraryUI:_searchLibraryEntries(query)
+    query = type(query) == "string" and query:lower():gsub("^%s+", ""):gsub("%s+$", "") or ""
+    if query == "" then
+        return {}
+    end
+    local results = {}
+    for _, entry in ipairs(self:_libraryEntries()) do
+        local title = (self:_entryTitle(entry) or ""):lower()
+        local author = (self:_entryAuthor(entry) or ""):lower()
+        if title:find(query, 1, true) or author:find(query, 1, true) then
+            table.insert(results, entry)
+        end
+    end
+    return results
+end
+
+function LibraryUI:_showLibrarySearch()
+    -- The header search icon searches the LIBRARY (device first, catalog
+    -- async), never the dictionary; dictionary lookup stays on its nav tab.
+    local InputDialog = require("ui/widget/inputdialog")
+    local dialog
+    dialog = InputDialog:new{
+        title = _("Search library"),
+        input = "",
+        buttons = {{
+            {
+                text = _("Cancel"),
+                id = "close",
+                callback = function()
+                    UIManager:close(dialog)
+                end,
+            },
+            {
+                text = _("Search"),
+                is_enter_default = true,
+                callback = function()
+                    local query = dialog:getInputText()
+                    UIManager:close(dialog)
+                    if type(query) == "string" and query:gsub("%s", "") ~= "" then
+                        self:_runLibrarySearch(query)
+                    end
+                end,
+            },
+        }},
+    }
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
+end
+
+function LibraryUI:_runLibrarySearch(query)
+    local Menu = require("ui/widget/menu")
+    local NetworkMgr = require("ui/network/manager")
+    local CatalogSearch = dofile(plugin_dir .. "/catalogsearch.lua")
+    self._catalog_search = self._catalog_search or CatalogSearch.new()
+    local cs = self._catalog_search
+    local server = cs:available() and cs:getServer() or nil
+
+    -- Device results paint instantly; the catalog section fills in after.
+    local unknown_label = _("Unknown")
+    local item_table = {}
+    for _, entry in ipairs(self:_searchLibraryEntries(query)) do
+        table.insert(item_table, {
+            text = self:_entryTitle(entry) or unknown_label,
+            mandatory = self:_entryAuthor(entry),
+            entry = entry,
+        })
+    end
+    if #item_table == 0 then
+        table.insert(item_table, {
+            text = _("No matches on this device"),
+            dim = true,
+            select_enabled = false,
+        })
+    end
+    if server then
+        table.insert(item_table, {
+            text = _("In your library"),
+            bold = true,
+            select_enabled = false,
+        })
+        table.insert(item_table, {
+            text = _("Searching your library…"),
+            dim = true,
+            select_enabled = false,
+        })
+    end
+
+    local menu, pending
+    menu = Menu:new{
+        title = T(_("Search: %1"), query),
+        item_table = item_table,
+        covers_fullscreen = true,
+        is_borderless = true,
+        is_popout = false,
+        title_bar_fm_style = true,
+        onMenuChoice = function(_menu, item)
+            if item.entry then
+                self:_openEntry(item.entry)
+            elseif item.remote then
+                NetworkMgr:runWhenConnected(function()
+                    UIManager:show(InfoMessage:new{ text = _("Downloading…"), timeout = 1 })
+                    UIManager:scheduleIn(1, function()
+                        local path, err = cs:download(server, item.remote)
+                        if path then
+                            if self.plugin and item.remote.catalog_id then
+                                self.plugin:recordDownload(item.remote.catalog_id, path)
+                            end
+                            if not self._closed then
+                                self:_invalidateLibraryCache()
+                                self:_triggerBackgroundExtraction()
+                                UIManager:setDirty(self, "ui", self.dimen)
+                            end
+                        else
+                            self:_showInfo(T(_("Download failed: %1"), err))
+                        end
+                    end)
+                end)
+            end
+        end,
+        close_callback = function()
+            menu._closed = true
+            if pending then
+                UIManager:unschedule(pending)
+            end
+            UIManager:close(menu)
+        end,
+    }
+    UIManager:show(menu)
+
+    if server then
+        NetworkMgr:runWhenConnected(function()
+            pending = UIManager:tickAfterNext(function()
+                -- the menu's local rows have painted by now; the fetch below
+                -- blocks briefly (3s connect / 5s total caps)
+                if menu._closed or not UIManager:isWidgetShown(menu) then
+                    return
+                end
+                local results, err = cs:search(server, query)
+                if menu._closed then
+                    return -- taps were queued during the block
+                end
+                local download_label = _("Download")
+                local items = menu.item_table
+                items[#items] = nil -- the "Searching…" placeholder is last by construction
+                if results and #results > 0 then
+                    for _, row in ipairs(results) do
+                        table.insert(items, {
+                            text = row.text or row.title,
+                            mandatory = download_label,
+                            remote = row,
+                        })
+                    end
+                else
+                    table.insert(items, {
+                        text = err and _("Library unavailable") or _("No matches in your library"),
+                        dim = true,
+                        select_enabled = false,
+                    })
+                end
+                menu:switchItemTable(nil, items, -1)
+            end)
+        end)
+    end
 end
 
 function LibraryUI:_showDictionaryLookup()
@@ -565,13 +802,43 @@ function LibraryUI:_continue()
 end
 
 function LibraryUI:_addBooks()
-    local opds = self:_opds()
-    if opds and type(opds.onShowOPDSCatalog) == "function" then
-        opds:onShowOPDSCatalog()
+    -- Open KOReader's stock OPDS catalog through the host's registered OPDS
+    -- module (self.ui.opds; plugin name "opds"), the same handler its own menu
+    -- item invokes. Guard on the handler's presence, not its type: at runtime
+    -- onShowOPDSCatalog resolves to a callable value rather than a bare
+    -- function, so a type=="function" check would wrongly fall through to the
+    -- placeholder. If OPDS is absent, opds is nil and the placeholder is right.
+    local opds = self.ui and self.ui.opds
+    if not (opds and opds.onShowOPDSCatalog) then
+        self:_showInfo(_("No book sources are configured."))
         return
     end
 
-    self:_showInfo(_("No book sources are configured."))
+    opds:onShowOPDSCatalog()
+
+    -- Refresh the library after the catalog closes. The OPDS browser stacks on
+    -- top of this still-shown widget and pops via its close_callback; nothing
+    -- on that path repaints the bookshelf or extracts a freshly downloaded
+    -- file, so a kept-browsing download would otherwise not appear. The call
+    -- above is synchronous and has already built opds.opds_browser with its
+    -- close_callback, so we wrap that callback in place, fresh each time,
+    -- against this live widget (no method monkeypatch, no stale capture).
+    local browser = opds.opds_browser
+    if browser then
+        local previous_close = browser.close_callback
+        local library = self
+        browser.close_callback = function(...)
+            if previous_close then
+                previous_close(...)
+            end
+            if library._closed then
+                return
+            end
+            library:_invalidateLibraryCache()
+            library:_triggerBackgroundExtraction()
+            UIManager:setDirty(library, "ui", library.dimen)
+        end
+    end
 end
 
 function LibraryUI:_zone(id, rect, callback, clip_rect)
@@ -730,23 +997,17 @@ function LibraryUI:_bookCardMetrics(kind, card_scale)
     return GridLayout.metrics(kind, card_scale or self.shelf_scale, self:_bookTextStack(kind))
 end
 
-function LibraryUI:_bookCardScaleForHeight(kind, height, max_scale)
-    max_scale = max_scale or self.shelf_scale or 1
-    if not height or height <= 0 or self:_bookCardMetrics(kind, max_scale).card_h <= height then
-        return max_scale
-    end
-
-    local low = 0
-    local high = max_scale
-    for _ = 1, 16 do
-        local mid = (low + high) / 2
-        if self:_bookCardMetrics(kind, mid).card_h <= height then
-            low = mid
-        else
-            high = mid
-        end
-    end
-    return low
+function LibraryUI:_coverSpecs()
+    local w = self.dimen and self.dimen.w or Screen:getWidth()
+    local h = self.dimen and self.dimen.h or Screen:getHeight()
+    local viewport_scale = self.shelf_scale or GridLayout.scaleForViewport(w, h)
+    local large = self:_recentlyAddedRailMetrics(w)
+    local small = self:_bookCardMetrics("small", viewport_scale)
+    local continue = self:_continueCardMetrics(viewport_scale)
+    return {
+        max_cover_w = math.max(large.cover_w, small.cover_w, continue.cover_h * 2),
+        max_cover_h = math.max(large.cover_h, small.cover_h, continue.cover_h),
+    }
 end
 
 function LibraryUI:_paintTextBox(bb, text, x, y, width, options)
@@ -858,7 +1119,7 @@ function LibraryUI:_paintHeader(bb, x, y, w)
     end)
     right = right - action - gap
     self:_paintHeaderAction(bb, "search", "search", right, y + self:_px(4), action, function()
-        self:_showDictionaryLookup()
+        self:_showLibrarySearch()
     end)
 end
 
@@ -1056,6 +1317,19 @@ function LibraryUI:_scheduleCoverCacheRetry()
     if self._cover_cache_retry_scheduled then
         return
     end
+    if type(self.cover_cache) == "table" then
+        for key, cover in pairs(self.cover_cache) do
+            if cover == false then
+                self.cover_cache[key] = nil
+            end
+        end
+    end
+    -- A stuck extraction must not repaint forever; covers that finish later
+    -- still land on any natural repaint.
+    self._cover_cache_retries = (self._cover_cache_retries or 0) + 1
+    if self._cover_cache_retries > 10 then
+        return
+    end
     self._cover_cache_retry_scheduled = true
     UIManager:scheduleIn(1, function()
         self._cover_cache_retry_scheduled = false
@@ -1081,11 +1355,7 @@ function LibraryUI:_cachedCoverFor(entry, w, h)
         return nil
     end
 
-    logger.info("Bookshelf cover trace: requesting getBookInfo for", self:_entryFile(entry))
-
     local ok, bookinfo = pcall(manager.getBookInfo, manager, self:_entryFile(entry), true)
-    logger.info("Bookshelf cover trace: bookinfo.has_cover=", bookinfo and bookinfo.has_cover, "in_progress=", bookinfo and bookinfo.in_progress)
-
     if not ok or type(bookinfo) ~= "table" then
         self:_scheduleCoverCacheRetry()
         return nil
@@ -1176,7 +1446,7 @@ function LibraryUI:_paintBookCover(bb, entry, x, y, w, h, kind)
         local author = self:_entryAuthor(entry) or _("Document")
         self:_paintText(bb, author, x + self:_px(12), y + h - self:_px(34), {
             face = FontTokens.sans,
-            size = 10,
+            size = TypeScale.card_meta,
             color = Blitbuffer.COLOR_DARK_GRAY,
             align = "center",
             width = w - self:_px(24),
@@ -1195,14 +1465,17 @@ function LibraryUI:_progressSummary(entry)
     local percent_text = string.format("%d%% read", math.floor(percent * 100 + 0.5))
     local page = tonumber(entry.current_page)
     local pages = tonumber(entry.pages)
+    if not page and pages and pages > 1 and percent > 0 then
+        page = math.min(pages, math.max(1, math.floor(percent * pages + 0.5)))
+    end
     if page and pages and pages > 1 then
-        return T(_("%1 - Page %2 of %3"), percent_text, page, pages)
+        return T(_("%1 • Page %2 of %3"), percent_text, page, pages)
     end
     return percent_text
 end
 
 function LibraryUI:_paintProgressLine(bb, x, y, w, percentage)
-    local bar_h = math.max(1, scale(2))
+    local bar_h = math.max(1, self:_px(Space.xs))
     percentage = clampPercent(percentage)
     bb:paintRect(x, y, w, bar_h, Blitbuffer.COLOR_LIGHT_GRAY)
     bb:paintRect(x, y, math.floor(w * percentage), bar_h, Blitbuffer.COLOR_BLACK)
@@ -1317,11 +1590,144 @@ function LibraryUI:_shelfPadding(kind)
 end
 
 function LibraryUI:_continueShelfBodyHeight()
+    if self:_continueEntry() then
+        return self:_continueCardMetrics().h
+    end
     return self:_bookCardMetrics("large", self.shelf_scale).card_h
 end
 
 function LibraryUI:_continueShelfMinBodyHeight()
     return self:_px(116)
+end
+
+function LibraryUI:_continueCardMetrics(card_scale)
+    card_scale = card_scale or self.shelf_scale or 1
+    local pad = self:_shelfPadding("large")
+    local spec = GridLayout.spec("large")
+    local h = GridLayout.scaleValue(spec.cover_w * GridLayout.cover_ratio, card_scale) + pad * 2
+    return {
+        pad = pad,
+        -- The cover bleeds to the card's top, left, and bottom edges so it
+        -- left-aligns with the shelf covers below and reads a size larger.
+        cover_w = math.floor(h / GridLayout.cover_ratio + 0.5),
+        cover_h = h,
+        h = h,
+    }
+end
+
+function LibraryUI:_paintContinueCard(bb, entry, x, y, w, h)
+    local metrics = self:_continueCardMetrics()
+    h = h or metrics.h
+    local pad = metrics.pad
+    local cover_h = math.max(1, h)
+
+    self:_paintPressedRect(bb, "continue_card", x, y, w, h)
+    self:_paintRectBorder(bb, x, y, w, h, Blitbuffer.COLOR_LIGHT_GRAY)
+
+    -- The cover bleeds flush to the card's top, left, and bottom edges and
+    -- keeps the artwork's own aspect, so the art never letterboxes; the 2:3
+    -- placeholder box is only used when no artwork exists.
+    local cover = self:_cachedCoverFor(entry, cover_h * 2, cover_h)
+    local cover_w
+    if cover then
+        cover_w = cover.w
+        bb:blitFrom(cover.bb, x, y + math.floor((h - cover.h) / 2), 0, 0, cover.w, cover.h)
+        self:_paintRectBorder(bb, x, y, cover_w, cover_h, Blitbuffer.COLOR_LIGHT_GRAY)
+    else
+        cover_w = math.floor(cover_h / GridLayout.cover_ratio + 0.5)
+        self:_paintBookCover(bb, entry, x, y, cover_w, cover_h, "large")
+    end
+
+    local menu_size = self:_iconSize()
+    local text_x = x + cover_w + self:_px(Space.xl)
+    local menu_x = x + w - pad - menu_size
+    local text_w = math.max(1, menu_x - self:_px(Space.m) - text_x)
+    local text_top = y + pad
+
+    local title_metrics = self:_textBoxLineMetrics(
+        FontTokens.serif_safe,
+        TypeScale.hero_title,
+        BookTextTokens.title_line_height,
+        BookTextTokens.title_max_lines)
+    local title_size = self:_paintTextBox(bb, self:_entryTitle(entry) or _("Untitled"), text_x, text_top, text_w, {
+        face = FontTokens.serif_safe,
+        size = TypeScale.hero_title,
+        height = math.min(title_metrics.h, math.max(1, h - pad * 2)),
+        height_adjust = true,
+        line_height = BookTextTokens.title_line_height,
+    })
+
+    local cursor_y = text_top + title_size.h
+    local author = self:_entryAuthor(entry)
+    if author and author ~= "" then
+        local author_size = self:_paintText(bb, author, text_x, cursor_y + self:_px(Space.s), {
+            face = FontTokens.sans,
+            size = TypeScale.category,
+            color = Blitbuffer.COLOR_DARK_GRAY,
+            max_width = text_w,
+        })
+        cursor_y = cursor_y + self:_px(Space.s) + author_size.h
+    end
+
+    -- A book with no reading state yet gets no progress block: "0% read"
+    -- and an empty bar would misrepresent a never-opened book.
+    local meta_top = y + h - pad
+    local percent = tonumber(entry and entry.percent_finished) or 0
+    local has_progress = percent > 0
+        or (entry and (entry.current or entry.status == "reading" or entry.status == "complete"))
+    if has_progress then
+        local bar_y = y + h - pad - math.max(1, self:_px(Space.xs))
+        meta_top = bar_y
+        local summary = self:_progressSummary(entry)
+        if summary ~= "" then
+            local summary_size = self:_textSize(summary, {
+                face = FontTokens.sans,
+                size = TypeScale.card_title,
+                max_width = text_w,
+            })
+            meta_top = bar_y - self:_px(Space.s) - summary_size.h
+            self:_paintText(bb, summary, text_x, meta_top, {
+                face = FontTokens.sans,
+                size = TypeScale.card_title,
+                color = Blitbuffer.COLOR_DARK_GRAY,
+                max_width = text_w,
+            })
+        end
+        self:_paintProgressLine(bb, text_x, bar_y, text_w, entry.percent_finished)
+    end
+
+    local snippet = entry and entry.resume_snippet
+    if type(snippet) == "string" and snippet ~= "" then
+        local snippet_y = cursor_y + self:_px(Space.m)
+        local line_metrics = self:_textBoxLineMetrics(
+            FontTokens.display_italic,
+            TypeScale.category,
+            BookTextTokens.title_line_height,
+            1)
+        local available = meta_top - self:_px(Space.m) - snippet_y
+        local lines = math.min(3, math.floor(available / line_metrics.line_h))
+        if lines >= 1 then
+            self:_paintTextBox(bb, "“" .. snippet .. "”", text_x, snippet_y, text_w, {
+                face = FontTokens.display_italic,
+                size = TypeScale.category,
+                color = Blitbuffer.COLOR_DARK_GRAY,
+                height = lines * line_metrics.line_h,
+                height_adjust = true,
+                line_height = BookTextTokens.title_line_height,
+            })
+        end
+    end
+
+    self:_paintCenteredIcon(bb, "more", menu_x, y + pad, menu_size, menu_size, false)
+    self:_zone("continue_card", Geom:new{x = x, y = y, w = w, h = h}, function()
+        self:_continue()
+    end)
+    self:_zone("continue_card_menu", Geom:new{x = menu_x - self:_px(Space.s), y = y + pad - self:_px(Space.s),
+        w = menu_size + self:_px(Space.l), h = menu_size + self:_px(Space.l)}, function()
+        self:_showMore()
+    end)
+
+    return h
 end
 
 function LibraryUI:_paintContinueEmptyState(bb, x, y, w, h)
@@ -1511,18 +1917,14 @@ function LibraryUI:_continueShelfNaturalHeight()
     return self:_sectionHeaderHeight() + self:_sectionGap() + self:_continueShelfBodyHeight()
 end
 
-function LibraryUI:_continueShelfMaxHeight()
-    return self:_sectionHeaderHeight() + self:_sectionGap() + self:_continueShelfBodyHeight()
-end
-
 function LibraryUI:_continueShelfMinHeight()
     return self:_sectionHeaderHeight() + self:_sectionGap() + self:_continueShelfMinBodyHeight()
 end
 
 function LibraryUI:_recentlyAddedRailMetrics(w)
     local rail_scale = GridLayout.railScale("large", w or (self.dimen and self.dimen.w), {
-        full_count = 4,
-        peek = 0.5,
+        full_count = RailTokens.recent_full_count,
+        peek = RailTokens.peek,
     })
     return self:_bookCardMetrics("large", rail_scale)
 end
@@ -1547,18 +1949,16 @@ function LibraryUI:_shelfStackLayout(content_y, nav_y)
     local continue_gap = self:_continueToLowerGap()
     local lower_gap = self:_lowerShelfGap()
     local bottom_margin = self:_lowerBottomMargin()
-    local continue_natural_h = math.min(self:_continueShelfNaturalHeight(), self:_continueShelfMaxHeight())
+    local continue_natural_h = self:_continueShelfNaturalHeight()
     local continue_min_h = math.min(continue_natural_h, self:_continueShelfMinHeight())
     local recent_h = self:_recentlyAddedShelfHeight(self.dimen and self.dimen.w)
-    local all_h = self:_allBooksShelfHeight(1)
-    local lower_stack_h = recent_h + lower_gap + all_h
-    local preferred_recent_y = nav_y - bottom_margin - lower_stack_h
-    local available_continue_h = preferred_recent_y - content_y - continue_gap
+    local all_min_h = self:_allBooksShelfHeight(1)
+    local available_continue_h = nav_y - bottom_margin - content_y
+        - continue_gap - recent_h - lower_gap - all_min_h
     local continue_h = math.min(continue_natural_h, math.max(continue_min_h, available_continue_h))
-    local recent_y = available_continue_h >= continue_min_h
-        and preferred_recent_y
-        or content_y + continue_h + continue_gap
+    local recent_y = content_y + continue_h + continue_gap
     local all_y = recent_y + recent_h + lower_gap
+    local all_h = math.max(all_min_h, nav_y - bottom_margin - all_y)
 
     return {
         continue_y = content_y,
@@ -1570,15 +1970,13 @@ function LibraryUI:_shelfStackLayout(content_y, nav_y)
         all_y = all_y,
         all_h = all_h,
         bottom_margin = bottom_margin,
-        lower_stack_h = lower_stack_h,
-        pinned = recent_y == preferred_recent_y,
+        lower_stack_h = recent_h + lower_gap + all_h,
         continue_shrunk = continue_h < continue_natural_h,
     }
 end
 
 function LibraryUI:_paintContinueShelf(bb, x, y, w, h)
     local entry = self:_continueEntry()
-    local entries = entry and { entry } or {}
     local metrics = self:_bookCardMetrics("large", self.shelf_scale)
     local header_x = x + metrics.outer
     local header_w = w - metrics.outer * 2
@@ -1589,17 +1987,14 @@ function LibraryUI:_paintContinueShelf(bb, x, y, w, h)
     local grid_y = y + self:_sectionHeaderHeight() + self:_sectionGap()
     local body_h = h and math.max(1, h - self:_sectionHeaderHeight() - self:_sectionGap())
         or self:_continueShelfBodyHeight()
-    if #entries == 0 then
+    if not entry then
         local empty_h = self:_paintContinueEmptyState(bb, x + metrics.outer, grid_y, header_w, body_h)
         return self:_sectionHeaderHeight() + self:_sectionGap() + empty_h
     end
 
-    local card_scale = self:_bookCardScaleForHeight("large", body_h, self.shelf_scale)
-    local grid = self:_paintGridCards(bb, "large", entries, x, grid_y, w, 1, "continue_", {
-        scale = card_scale,
-        show_state = false,
-    })
-    return self:_sectionHeaderHeight() + self:_sectionGap() + grid.metrics.card_h
+    local card_h = math.min(body_h, self:_continueCardMetrics().h)
+    self:_paintContinueCard(bb, entry, x + metrics.outer, grid_y, header_w, card_h)
+    return self:_sectionHeaderHeight() + self:_sectionGap() + card_h
 end
 
 function LibraryUI:_paintRecentlyAdded(bb, x, y, w)
@@ -1617,23 +2012,11 @@ function LibraryUI:_paintRecentlyAdded(bb, x, y, w)
     end
 
     local rail = self:_paintCarouselRail(bb, "recently_added", "large", entries, x, grid_y, w, "recent_", {
-        full_count = 4,
-        peek = 0.5,
+        full_count = RailTokens.recent_full_count,
+        peek = RailTokens.peek,
         show_state = true,
     })
     return self:_sectionHeaderHeight() + self:_sectionGap() + rail.metrics.card_h
-end
-
-function LibraryUI:_allBookColumns(w)
-    local rail = GridLayout.rail("small", {
-        x = 0,
-        y = 0,
-        w = w,
-        item_count = 999,
-        scale = self.shelf_scale,
-        text_stack = self:_bookTextStack("small"),
-    })
-    return math.max(1, rail.visible_count)
 end
 
 function LibraryUI:_paintAllBooks(bb, x, y, w, h)
@@ -1643,7 +2026,7 @@ function LibraryUI:_paintAllBooks(bb, x, y, w, h)
     local metrics = self:_allBooksRailMetrics()
     local header_x = x + metrics.outer
     local header_w = w - metrics.outer * 2
-    self:_paintLine(bb, self.dimen.x, y - self:_px(18), self.dimen.w, Blitbuffer.COLOR_LIGHT_GRAY)
+    self:_paintLine(bb, self.dimen.x, y - self:_px(Space.l), self.dimen.w, Blitbuffer.COLOR_LIGHT_GRAY)
     self:_paintCategoryHeader(bb, {
         title = _("All books"),
         count_text = count_text,
@@ -1664,53 +2047,61 @@ function LibraryUI:_paintAllBooks(bb, x, y, w, h)
     })
 
     local grid_y = y + self:_sectionHeaderHeight() + self:_sectionGap()
-    local grid_h = h - self:_sectionHeaderHeight() - self:_sectionGap()
-    local rows = GridLayout.rowsForHeight("small", grid_h, metrics.scale, self:_bookTextStack("small"))
-    local cols = self:_allBookColumns(w)
-    if rows == 0 then
-        self.all_books_page_size = 1
-        return
-    end
-
-    local page_size = math.max(1, cols * rows)
-    self.all_books_page_size = page_size
-
     if count == 0 then
         self:_paintEmptyShelfPlaceholder(bb, x + metrics.outer, grid_y, metrics.card_w * 2 + metrics.gutter, metrics.card_h)
         return
     end
 
-    local state = self:_railState("all_books")
-    local window = GridLayout.pageWindow(count, page_size, state.page, page_size)
-    self:_setRailPage("all_books", window.page)
-    local page_entries = entriesWindow(entries, window.first, window.count)
-    local rail_rect = Geom:new{x = x, y = grid_y, w = w, h = grid_h}
-    local rail = GridLayout.rail("small", {
-        x = x,
-        y = grid_y,
-        w = w,
-        item_count = #page_entries,
-        scale = self.shelf_scale,
-        text_stack = self:_bookTextStack("small"),
+    -- Same rail grammar as recently added: a half cover at the edge signals
+    -- there are more books to swipe to. The full count emerges from the width.
+    self:_paintCarouselRail(bb, "all_books", "small", entries, x, grid_y, w, "book_", {
+        full_count = GridLayout.columns("small", w, self.shelf_scale, self:_bookTextStack("small")),
+        peek = RailTokens.peek,
     })
-    for i, slot in ipairs(rail.slots) do
-        self:_paintBookCard(bb, page_entries[i], slot, "book_" .. tostring(window.first + i - 1), {
-            kind = "small",
-            scale = rail.scale,
-            clip_rect = rail_rect,
-        })
+end
+
+-- The four tabs, shared by the home and the Discover surface; the active tab
+-- comes from the widget's active_nav_tab field (home by default).
+function LibraryUI:_navItems()
+    return {
+        { id = "nav_library", text = _("Library"), icon = "library", callback = function() self:_navHome() end },
+        { id = "nav_dictionary", text = _("Dictionary"), icon = "dictionary", callback = function() self:_showDictionaryLookup() end },
+        { id = "nav_discover", text = _("Discover"), icon = "discover", callback = function() self:_showDiscover() end },
+        { id = "nav_files", text = _("Files"), icon = "files", callback = function() self:_showFiles() end },
+    }
+end
+
+function LibraryUI:_navHome()
+    -- the home is already the Library tab; Discover overrides this to close
+end
+
+function LibraryUI:_showDiscover()
+    if self._discover_ui and not self._discover_ui._closed then
+        return
     end
-    self:_registerRail("all_books", rail_rect, window)
+    self._discover_class = self._discover_class
+        or dofile(plugin_dir .. "/discover.lua")(LibraryUI, plugin_dir)
+    local library = self
+    self._discover_ui = self._discover_class:new{
+        ui = self.ui,
+        plugin = self.plugin,
+        closed_callback = function()
+            library._discover_ui = nil
+            if not library._closed then
+                UIManager:setDirty(library, "ui", library.dimen)
+            end
+        end,
+    }
+    UIManager:show(self._discover_ui)
 end
 
 function LibraryUI:_paintBottomNav(bb, x, y, w, h)
     self:_paintLine(bb, x, y, w)
-    local labels = {
-        { id = "nav_library", text = _("Library"), icon = "library", callback = function() end, selected = true },
-        { id = "nav_dictionary", text = _("Dictionary"), icon = "dictionary", callback = function() self:_showDictionaryLookup() end },
-        { id = "nav_add", text = _("Add Books"), icon = "add", callback = function() self:_addBooks() end },
-        { id = "nav_files", text = _("Files"), icon = "files", callback = function() self:_showFiles() end },
-    }
+    local labels = self:_navItems()
+    local active = self.active_nav_tab or "nav_library"
+    for _, item in ipairs(labels) do
+        item.selected = item.id == active
+    end
     local nav = GridLayout.bottomTabs{
         x = x,
         y = y,

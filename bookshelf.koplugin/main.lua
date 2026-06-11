@@ -1,4 +1,6 @@
+local DataStorage = require("datastorage")
 local Dispatcher = require("dispatcher")
+local LuaSettings = require("luasettings")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local lfs = require("libs/libkoreader-lfs")
@@ -21,7 +23,82 @@ local Bookshelf = WidgetContainer:extend{
     name = "bookshelf",
     is_doc_only = false,
     provider = nil,
+    settings_file = DataStorage:getSettingsDir() .. "/bookshelf.lua",
 }
+
+-- Plugin-owned persistence: the Discover feed snapshot and the download map
+-- (catalog book id -> local file). One writer per host lifetime; loaded
+-- lazily so startup cost stays zero. LuaSettings only writes on :flush().
+function Bookshelf:loadSettings()
+    if self.settings then
+        return
+    end
+    self.settings = LuaSettings:open(self.settings_file)
+    self.settings:saveSetting("schema", 1)
+    -- live by-reference table: collaborators mutate it in place
+    self.downloads = self.settings:readSetting("downloads", {})
+    self:_pruneDownloads()
+    if self.settings_dirty then
+        -- once per host session, off the paint path: safe to flush eagerly
+        self.settings:flush()
+        self.settings_dirty = false
+    end
+end
+
+function Bookshelf:_pruneDownloads()
+    for id, path in pairs(self.downloads) do
+        if lfs.attributes(path, "mode") ~= "file" then
+            self.downloads[id] = nil
+            self.settings_dirty = true
+        end
+    end
+end
+
+function Bookshelf:downloadedPath(catalog_id)
+    if not catalog_id then
+        return nil
+    end
+    self:loadSettings()
+    local path = self.downloads[catalog_id]
+    if path and lfs.attributes(path, "mode") == "file" then
+        return path
+    end
+end
+
+function Bookshelf:recordDownload(catalog_id, path)
+    if not catalog_id or not path then
+        return
+    end
+    self:loadSettings()
+    self.downloads[catalog_id] = path
+    -- eager: this map is the ground truth for "on device", and e-ink
+    -- devices suspend or die without warning
+    self.settings:flush()
+    self.settings_dirty = false
+end
+
+function Bookshelf:discoverSnapshot()
+    self:loadSettings()
+    return self.settings:readSetting("discover_snapshot")
+end
+
+function Bookshelf:saveDiscoverSnapshot(snapshot)
+    self:loadSettings()
+    -- replace the whole key, never mutate the old table: a refresh is a new
+    -- world, replacement makes torn half-old/half-new states impossible
+    self.settings:saveSetting("discover_snapshot", snapshot)
+    self.settings:flush()
+    self.settings_dirty = false
+end
+
+-- FlushSettings (suspend/SaveState/host close) is the deferred safety net
+-- for prune-only dirt; distinct from onSaveSettings (document settings).
+function Bookshelf:onFlushSettings()
+    if self.settings and self.settings_dirty then
+        self.settings:flush()
+        self.settings_dirty = false
+    end
+end
 
 function Bookshelf:onDispatcherRegisterActions()
     Dispatcher:registerAction("library_show", {
@@ -35,7 +112,6 @@ end
 function Bookshelf:init()
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
-    self:_scheduleReadingPreset()
     self:_scheduleLibraryHome()
 end
 
@@ -60,27 +136,23 @@ function Bookshelf:_isLibraryHome()
     if home_view ~= nil then
         return home_view == "library"
     end
-    return (self:_readSetting("start_with") or "library") == "library"
+    return self:_readSetting("start_with") == "library"
 end
 
 function Bookshelf:_isReaderHost()
     return self.ui and self.ui.document ~= nil
 end
 
-function Bookshelf:_scheduleReadingPreset()
-    if not self:_isReaderHost() or not self.ui or type(self.ui.registerPostReaderReadyCallback) ~= "function" then
+function Bookshelf:onReaderReady()
+    if not self:_isReaderHost() then
         return
     end
-
     local preset_id = self:_readSetting("bookshelf_auto_apply_reading_preset")
     if type(preset_id) ~= "string" or preset_id == "" then
         return
     end
-
-    self.ui:registerPostReaderReadyCallback(function()
-        UIManager:nextTick(function()
-            self:_applyReadingPreset(preset_id)
-        end)
+    UIManager:nextTick(function()
+        self:_applyReadingPreset(preset_id)
     end)
 end
 
@@ -88,6 +160,18 @@ function Bookshelf:_applyReadingPreset(preset_id)
     local ok, ReadingPreset = pcall(dofile, self.path .. "/readingpreset.lua")
     if not ok then
         logger.warn("Bookshelf reading preset loader failed:", ReadingPreset)
+        return false
+    end
+
+    local doc_props = self.ui and self.ui.doc_props or {}
+    local preset_ok, preset = pcall(ReadingPreset.getPreset, preset_id)
+    if not preset_ok then
+        logger.warn("Bookshelf reading preset unknown:", preset_id)
+        return false
+    end
+    if not ReadingPreset.appliesToLanguage(preset, doc_props.language) then
+        logger.info("Bookshelf reading preset skipped: book language",
+            tostring(doc_props.language), "is outside the preset's scope")
         return false
     end
 
@@ -103,7 +187,33 @@ function Bookshelf:_applyReadingPreset(preset_id)
         return false
     end
 
-    Dispatcher:execute(result.profile)
+    -- An auto-applied preset should not stack a toast per changed setting.
+    -- Dispatcher:execute overrides the notify source itself, so the only
+    -- surviving lever is the user-facing source mask, narrowed transiently;
+    -- SOURCE_ALWAYS_SHOW notifications still pass.
+    local saved_mask = G_reader_settings:readSetting("notification_sources_to_show_mask")
+    G_reader_settings:saveSetting("notification_sources_to_show_mask", 0)
+    local exec_ok, exec_err = pcall(Dispatcher.execute, Dispatcher, result.profile)
+    if saved_mask ~= nil then
+        G_reader_settings:saveSetting("notification_sources_to_show_mask", saved_mask)
+    else
+        G_reader_settings:delSetting("notification_sources_to_show_mask")
+    end
+    if not exec_ok then
+        logger.warn("Bookshelf reading preset dispatch failed:", exec_err)
+        return false
+    end
+
+    -- ui.doc_props whitelists display fields; the raw engine props with the
+    -- publisher identifiers live in the book's saved doc_props setting.
+    local raw_props = self.ui and self.ui.doc_settings
+        and self.ui.doc_settings:readSetting("doc_props") or {}
+    local repair_css = ReadingPreset.publisherRepairCss(raw_props)
+    if repair_css then
+        result.css_tweak = (result.css_tweak and (result.css_tweak .. "\n") or "") .. repair_css
+        logger.info("Bookshelf applied publisher template repair (Project Gutenberg).")
+    end
+
     if self.ui and self.ui.styletweak and result.css_tweak then
         self.ui.styletweak.tweaks_by_id["bookshelf_preset_tweak"] = {
             id = "bookshelf_preset_tweak",
@@ -208,6 +318,7 @@ function Bookshelf:onShowLibrary()
 
     self.bookshelf_ui = BookshelfUI:new{
         ui = self.ui,
+        plugin = self,
         provider = self:getProvider(),
         closed_callback = function()
             self.bookshelf_ui = nil
@@ -222,6 +333,40 @@ function Bookshelf:onShowHome()
         return self:onShowLibrary()
     end
     return false
+end
+
+function Bookshelf:_captureResumeSnippet()
+    if not (self.ui and self.ui.document) then
+        return
+    end
+    -- SaveSettings and CloseDocument can both fire around one close;
+    -- capture at most once per moment.
+    local now = os.time()
+    if self._snippet_captured_at and now - self._snippet_captured_at < 2 then
+        return
+    end
+    local ok, ResumeSnippet = pcall(dofile, self.path .. "/resumesnippet.lua")
+    if not ok then
+        logger.warn("Bookshelf resume snippet loader failed:", ResumeSnippet)
+        return
+    end
+    local capture_ok, captured = pcall(ResumeSnippet.capture, self.ui)
+    if not capture_ok then
+        logger.warn("Bookshelf resume snippet capture failed:", captured)
+    elseif captured then
+        self._snippet_captured_at = now
+    end
+end
+
+-- The reader closes the document before its deferred settings flush, so
+-- capture on CloseDocument (document still live); SaveSettings covers
+-- suspend and periodic autosave while reading.
+function Bookshelf:onSaveSettings()
+    self:_captureResumeSnippet()
+end
+
+function Bookshelf:onCloseDocument()
+    self:_captureResumeSnippet()
 end
 
 return Bookshelf

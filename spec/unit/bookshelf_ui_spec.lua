@@ -13,6 +13,80 @@ describe("Bookshelf UI module", function()
         assert.is_function(LibraryUI.new)
     end)
 
+    it("passes cover specs into background extraction", function()
+        local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
+        local UIManager = require("ui/uimanager")
+        local old_next_tick = UIManager.nextTick
+        finally(function()
+            UIManager.nextTick = old_next_tick
+        end)
+        UIManager.nextTick = function(_, callback)
+            callback()
+        end
+
+        local cover_specs = { max_cover_w = 320, max_cover_h = 480 }
+        local checked_specs
+        local extracted
+        local manager = {
+            getBookInfo = function()
+                return { cover_fetched = true, has_cover = true }
+            end,
+            isCachedCoverInvalid = function(_, specs)
+                checked_specs = specs
+                return true
+            end,
+            extractInBackground = function(_, entries)
+                extracted = entries
+                return true
+            end,
+        }
+        local fake = setmetatable({
+            _bookInfoManager = function()
+                return manager
+            end,
+            _coverSpecs = function()
+                return cover_specs
+            end,
+            _libraryEntries = function()
+                return { { file = "/downloads/book.epub" } }
+            end,
+            _entryFile = function(_, entry)
+                return entry.file
+            end,
+            _scheduleCoverCacheRetry = function() end,
+        }, { __index = LibraryUI })
+
+        LibraryUI._triggerBackgroundExtraction(fake)
+
+        assert.equals(cover_specs, checked_specs)
+        assert.equals(cover_specs, extracted[1].cover_specs)
+        assert.equals("/downloads/book.epub", extracted[1].filepath)
+    end)
+
+    it("memoizes the continue entry until the library cache is invalidated", function()
+        local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
+        local provider_calls = 0
+        local fake = setmetatable({
+            _providerEntry = function()
+                provider_calls = provider_calls + 1
+                return { file = "/downloads/book.epub", title = "Book" }
+            end,
+            _normalizeContinueEntry = function(_, entry)
+                return entry
+            end,
+        }, { __index = LibraryUI })
+
+        local first = LibraryUI._continueEntry(fake)
+        local second = LibraryUI._continueEntry(fake)
+
+        assert.equals(1, provider_calls)
+        assert.equals(first, second)
+
+        LibraryUI._invalidateLibraryCache(fake)
+        LibraryUI._continueEntry(fake)
+        assert.equals(2, provider_calls)
+    end)
+
     it("does not draw a border around book card text", function()
         local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
         local GridLayout = dofile("plugins/bookshelf.koplugin/gridlayout.lua")
@@ -959,7 +1033,7 @@ describe("Bookshelf UI module", function()
         }, { __index = LibraryUI })
 
         assert.is_true(LibraryUI.onShowingReader(fake))
-        assert.is_true(LibraryUI.onShowFileManager(fake))
+        assert.is_false(LibraryUI.onShowFileManager(fake))
         assert.same({ "full", "full" }, close_refresh_types)
     end)
 end)

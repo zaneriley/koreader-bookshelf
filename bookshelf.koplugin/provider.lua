@@ -149,6 +149,15 @@ local function firstPresent(...)
     end
 end
 
+-- KOReader stores multiple authors newline-separated; join them before
+-- asString collapses the newline into a plain space.
+local function joinAuthorLines(value)
+    if type(value) ~= "string" then
+        return value
+    end
+    return (value:gsub("%s*\n%s*", ", "))
+end
+
 function DownloadedBookProvider.getStableId(file)
     return "downloaded:" .. tostring(file or "")
 end
@@ -171,7 +180,9 @@ function DownloadedBookProvider.recordFromRow(row, opts)
         filenameWithoutSuffix(file),
         file
     )
-    local authors = firstPresent(doc_props.authors, type(row) == "table" and row.authors)
+    local authors = firstPresent(
+        joinAuthorLines(doc_props.authors),
+        type(row) == "table" and joinAuthorLines(row.authors))
     local series = firstPresent(doc_props.series)
     local exists
     if type(row) == "table" and row.select_enabled ~= nil then
@@ -325,13 +336,32 @@ function DownloadedBookProvider.getDownloadedBooks(opts)
     return DownloadedBookProvider.recordsFromRows(DownloadedBookProvider.rowsFromDownloadDir(opts), opts)
 end
 
+local function readDocSetting(file, key)
+    local DocSettings = require("docsettings")
+    if not DocSettings:hasSidecarFile(file) then
+        return nil
+    end
+    local ok, doc_settings = pcall(DocSettings.open, DocSettings, file)
+    if not ok or not doc_settings or type(doc_settings.readSetting) ~= "function" then
+        return nil
+    end
+    -- Read-only: never flush, or we would rewrite the sidecar on every paint.
+    return doc_settings:readSetting(key)
+end
+
 function DownloadedBookProvider.getContinue(opts)
     opts = opts or {}
     local ReadHistory = opts.ReadHistory or require("readhistory")
     if ReadHistory.reload then
         ReadHistory:reload()
     end
-    return DownloadedBookProvider.recordFromRow((ReadHistory.hist or {})[1], opts)
+    local record = DownloadedBookProvider.recordFromRow((ReadHistory.hist or {})[1], opts)
+    if record and record.file then
+        local read_setting = opts.read_doc_setting or readDocSetting
+        record.resume_snippet = read_setting(record.file, "bookshelf_resume_snippet")
+        record.resume_chapter = read_setting(record.file, "bookshelf_resume_chapter")
+    end
+    return record
 end
 
 return DownloadedBookProvider

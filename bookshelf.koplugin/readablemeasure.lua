@@ -132,16 +132,16 @@ end
 
 function ReadableMeasure.translateToKOReaderProfile(opts)
     opts = opts or {}
-    
+
     local viewport_width_px = assert_number("viewport_width_px", opts.viewport_width_px)
     local dpi = assert_number("dpi", opts.dpi or 226)
-    
+
     local target_cpl = assert_number("target_cpl", opts.target_cpl or 62)
     local preferred_cpl = normalize_range(opts.preferred_cpl, DEFAULT_PREFERRED_CPL)
     local acceptable_cpl = normalize_range(opts.acceptable_cpl, DEFAULT_ACCEPTABLE_CPL)
-    
+
     assert(opts.font_face, "font_face is required")
-    
+
     local scale = opts.scale or 1
     local scale_by_size = opts.scale_by_size or function(value) return value * scale end
     local inverse_scale_by_size = opts.inverse_scale_by_size or function(value) return value / scale end
@@ -162,10 +162,10 @@ function ReadableMeasure.translateToKOReaderProfile(opts)
     local best_score = math.huge
     local columns = 1
     local gutter_px = 0
-    
+
     local min_cpl = acceptable_cpl.min
     local max_cpl = acceptable_cpl.max
-    
+
     local min_margin_pt = opts.min_margin_pt or 12
     local max_margin_pt = opts.max_margin_pt or 200
     local min_margin_px = min_margin_pt * dpi / 72
@@ -174,12 +174,12 @@ function ReadableMeasure.translateToKOReaderProfile(opts)
     local preferred_margin_px = preferred_margin_pt * dpi / 72
     local margin_span = max_margin_px - min_margin_px
     if margin_span <= 0 then margin_span = 1 end
-    
+
     local candidates = opts.font_size_candidates or { 16, 17, 18, 19, 20, 21, 22, 23, 24 }
     local target_logical_font_size = opts.target_logical_font_size or 22
     local font_size_span = math.abs(candidates[1] - candidates[table.maxn(candidates)])
     if font_size_span == 0 then font_size_span = 1 end
-    
+
     local cpl_span = max_cpl - min_cpl
     if cpl_span <= 0 then cpl_span = 1 end
 
@@ -192,13 +192,13 @@ function ReadableMeasure.translateToKOReaderProfile(opts)
     for _, logical_size in ipairs(candidates) do
         local engine_size_px = scale_by_size(logical_size)
         local advance_px = engine_size_px * a
-        
+
         local cpl_margin_min = (viewport_width_px - gutter_px * (columns - 1) - columns * max_cpl * advance_px) / 2
         local cpl_margin_max = (viewport_width_px - gutter_px * (columns - 1) - columns * min_cpl * advance_px) / 2
-        
+
         local valid_margin_min = math.max(cpl_margin_min, min_margin_px)
         local valid_margin_max = math.min(cpl_margin_max, max_margin_px)
-        
+
         local min_ui_margin_px = scale_by_size(margin_bounds.min)
         local max_ui_margin_px = scale_by_size(margin_bounds.max)
         valid_margin_min = math.max(valid_margin_min, min_ui_margin_px)
@@ -208,20 +208,20 @@ function ReadableMeasure.translateToKOReaderProfile(opts)
             local chosen_margin_px = clamp(preferred_margin_px, valid_margin_min, valid_margin_max)
             local chosen_margin_setting = clamp(round(inverse_scale_by_size(chosen_margin_px)), margin_bounds.min, margin_bounds.max)
             local rendered_margin_px = scale_by_size(chosen_margin_setting)
-            
+
             local content_width_px = math.max(0, viewport_width_px - 2 * rendered_margin_px - gutter_px * (columns - 1))
             local actual_cpl = (content_width_px / columns) / advance_px
-            
+
             local font_weight = opts.font_weight or 3.0
             local margin_weight = opts.margin_weight or 2.0
             local cpl_weight = opts.cpl_weight or 1.0
-            
+
             local font_penalty = math.abs(logical_size - target_logical_font_size) / font_size_span
             local margin_penalty = math.abs(rendered_margin_px - preferred_margin_px) / margin_span
             local cpl_penalty = math.abs(actual_cpl - target_cpl) / cpl_span
-            
+
             local score = (font_weight * font_penalty) + (margin_weight * margin_penalty) + (cpl_weight * cpl_penalty)
-            
+
             logger.info(string.format("Bookshelf debugging candidate %d: sz_px=%.1f, m_px=%.1f, cpl=%.1f, score=%.3f", logical_size, engine_size_px, rendered_margin_px, actual_cpl, score))
 
             if score < best_score then
@@ -262,21 +262,15 @@ function ReadableMeasure.translateToKOReaderProfile(opts)
         result.failure_owner = "Reading Preset tuning"
     else
         result.profile = build_profile(opts, best_candidate)
-        
+
         local css_lines = {
             "/* Bookshelf Ephemeral Typography Tweak */",
-            "* {",
-            "    font-family: '" .. tostring(opts.profile_font_face or opts.font_face) .. "' !important;",
+            "p, li, blockquote {",
+            "    font-family: inherit !important;",
+            "}",
         }
-        if opts.line_spacing then
-            table.insert(css_lines, "    line-height: " .. tostring(opts.line_spacing / 100) .. " !important;")
-        end
-        table.insert(css_lines, "}")
-        table.insert(css_lines, "body {")
-        table.insert(css_lines, "    margin-left: " .. tostring(best_candidate.rendered_margin_px) .. "px !important;")
-        table.insert(css_lines, "    margin-right: " .. tostring(best_candidate.rendered_margin_px) .. "px !important;")
-        table.insert(css_lines, "}")
         result.css_tweak = table.concat(css_lines, "\n")
+
 
         if best_candidate.measure_status == "fail" then
             result.result = "needs-followup"
