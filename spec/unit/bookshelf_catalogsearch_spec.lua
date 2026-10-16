@@ -156,6 +156,36 @@ describe("Bookshelf catalog search", function()
         assert.equals("rye", server.username)
     end)
 
+    it("prefers the credentialed OPDS root over a saved section feed", function()
+        local cs = CatalogSearch.new{
+            settings_open = function()
+                return {
+                    readSetting = function(_, key)
+                        assert.equals("servers", key)
+                        return {
+                            {
+                                title = "Recently Added",
+                                url = "http://lib.example/opds/new",
+                                username = "rye",
+                                password = "secret",
+                            },
+                            {
+                                title = "My Library",
+                                url = "http://lib.example/opds",
+                                username = "rye",
+                                password = "secret",
+                            },
+                        }
+                    end,
+                }
+            end,
+        }
+
+        local server = cs:getServer()
+        assert.equals("My Library", server.title)
+        assert.equals("http://lib.example/opds", server.url)
+    end)
+
     it("returns nil when no credentialed server is configured", function()
         local cs = CatalogSearch.new{
             settings_open = function()

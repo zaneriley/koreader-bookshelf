@@ -81,6 +81,7 @@ function DiscoverUI:init()
     self._server = self.catalog_search:available() and self.catalog_search:getServer() or nil
     self._thumb_queue = {}
     self._thumb_inflight = {}
+    self._thumb_regions = {}
 
     local snapshot = self.plugin and self.plugin:discoverSnapshot()
     self._snapshot_fetched_at = snapshot and snapshot.fetched_at
@@ -160,6 +161,7 @@ function DiscoverUI:paintTo(bb, x, y)
     self.dimen.h = Screen:getHeight()
     self.zones = {}
     self.rail_regions = {}
+    self._thumb_regions = {}
     self._paint_cache = {}
     local w = self.dimen.w
     local h = self.dimen.h
@@ -184,6 +186,12 @@ function DiscoverUI:paintTo(bb, x, y)
     local rail_pitch = self:_railPitch(w)
     local indicator_h = self:_px(RailStackTokens.indicator_band)
     local avail = nav_y - cursor_y - indicator_h
+    self._rail_stack_rect = Geom:new{
+        x = x,
+        y = cursor_y,
+        w = w,
+        h = math.max(1, nav_y - cursor_y),
+    }
     -- a viewport too short for one rail still paints that rail, but the
     -- pager would overlap it: skip the squares, swipes still page
     local indicator_fits = avail >= rail_pitch
@@ -234,7 +242,7 @@ function DiscoverUI:onSwipe(arg, ges)
         end
         if next_page ~= page then
             self._rail_stack_page = next_page
-            UIManager:setDirty(self, "ui", self.dimen)
+            UIManager:setDirty(self, "ui", self._rail_stack_rect or self.dimen)
         end
         return true
     end
@@ -349,6 +357,19 @@ end
 -- on-device mark: decorate the inherited card painter
 function DiscoverUI:_paintBookCard(bb, entry, slot, id, options)
     LibraryUI._paintBookCard(self, bb, entry, slot, id, options)
+    if entry and entry.catalog_id then
+        local inset = self:_hairline()
+        local key = self:_coverCacheKey(entry, slot.cover.w - inset * 2, slot.cover.h - inset * 2)
+        if key then
+            self._thumb_regions = self._thumb_regions or {}
+            self._thumb_regions[key] = Geom:new{
+                x = slot.cover.x,
+                y = slot.cover.y,
+                w = slot.cover.w,
+                h = slot.cover.h,
+            }
+        end
+    end
     if entry and entry.file then
         local size = self:_px(14)
         bb:paintRect(slot.cover.x + slot.cover.w - size - self:_px(6),
@@ -387,16 +408,21 @@ function DiscoverUI:_drainThumbQueue()
         end
         -- a few jobs per slot keeps taps responsive; one repaint per drain
         -- slot instead of one per thumbnail
-        local filled = false
+        local dirty_rect
         for _i = 1, 3 do
             local job = table.remove(self._thumb_queue, 1)
             if not job then
                 break
             end
-            filled = self:_fillThumb(job) or filled
+            if self:_fillThumb(job) then
+                local rect = self._thumb_regions and self._thumb_regions[job.key]
+                if rect then
+                    dirty_rect = dirty_rect and dirty_rect:combine(rect) or rect
+                end
+            end
         end
-        if filled then
-            UIManager:setDirty(self, "ui", self.dimen)
+        if dirty_rect then
+            UIManager:setDirty(self, "ui", dirty_rect)
         end
         self:_drainThumbQueue()
     end)
@@ -691,6 +717,7 @@ function ShelfDetailUI:init()
     self._server = self.catalog_search:available() and self.catalog_search:getServer() or nil
     self._thumb_queue = {}
     self._thumb_inflight = {}
+    self._thumb_regions = {}
 
     -- paint instantly from the rail's snapshot rows; the live feed
     -- replaces them when the network allows
@@ -742,6 +769,7 @@ function ShelfDetailUI:paintTo(bb, x, y)
     self.dimen.h = Screen:getHeight()
     self.zones = {}
     self.rail_regions = {}
+    self._thumb_regions = {}
     self._paint_cache = {}
     local w = self.dimen.w
     local h = self.dimen.h
@@ -775,6 +803,12 @@ function ShelfDetailUI:paintTo(bb, x, y)
     local indicator_h = self:_px(RailStackTokens.indicator_band)
     local row_pitch = metrics.card_h + metrics.row_gap
     local avail = nav_y - cursor_y - indicator_h
+    self._detail_stack_rect = Geom:new{
+        x = x,
+        y = cursor_y,
+        w = w,
+        h = math.max(1, nav_y - cursor_y),
+    }
     local indicator_fits = avail >= metrics.card_h
     local rows_per_page = math.max(1, math.floor((avail + metrics.row_gap) / row_pitch))
     local cols = GridLayout.columns("small", w, self.shelf_scale, self:_bookTextStack("small"))
@@ -831,7 +865,7 @@ function ShelfDetailUI:onSwipe(arg, ges)
         end
         if next_page ~= page then
             self._page = next_page
-            UIManager:setDirty(self, "ui", self.dimen)
+            UIManager:setDirty(self, "ui", self._detail_stack_rect or self.dimen)
         end
         return true
     end

@@ -194,6 +194,52 @@ describe("Bookshelf plugin FileManager choreography", function()
 
         _G.G_reader_settings = original_reader_settings
     end)
+
+    it("auto-applies the reading preset only on a book's first open", function()
+        local LuaSettings = require("luasettings")
+        local original_reader_settings = _G.G_reader_settings
+        local old_next_tick = UIManager.nextTick
+        finally(function()
+            _G.G_reader_settings = original_reader_settings
+            UIManager.nextTick = old_next_tick
+        end)
+        _G.G_reader_settings = {
+            readSetting = function(_, name)
+                if name == "bookshelf_auto_apply_reading_preset" then
+                    return "comfortable"
+                end
+            end,
+        }
+        UIManager.nextTick = function(_, callback)
+            callback()
+        end
+
+        local doc_settings = LuaSettings:open("/tmp/bookshelf-preset-first-open-spec.lua")
+        local applied = 0
+        local apply_ok = false
+        local plugin = setmetatable({
+            ui = { document = {}, doc_settings = doc_settings },
+            _applyReadingPreset = function(_, preset_id)
+                assert.equals("comfortable", preset_id)
+                applied = applied + 1
+                return apply_ok
+            end,
+        }, { __index = Bookshelf })
+
+        -- a failed apply (e.g. language outside the preset) retries next open
+        plugin:onReaderReady()
+        assert.equals(1, applied)
+        assert.is_false(doc_settings:isTrue("bookshelf_reading_preset_applied"))
+
+        apply_ok = true
+        plugin:onReaderReady()
+        assert.equals(2, applied)
+        assert.is_true(doc_settings:isTrue("bookshelf_reading_preset_applied"))
+
+        -- reopening keeps the reader's own font changes
+        plugin:onReaderReady()
+        assert.equals(2, applied)
+    end)
 end)
 
 describe("Bookshelf reader home integration", function()

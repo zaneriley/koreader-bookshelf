@@ -1355,14 +1355,12 @@ end
 function LibraryUI:_setPressedZone(zone)
     self.pressed_zone_id = zone.id
     UIManager:setDirty(self, "ui", zone.rect)
-    UIManager:scheduleIn(0.05, function()
-        if self._closed then
-            return
-        end
-        self.pressed_zone_id = nil
-        UIManager:setDirty(self, "ui", zone.rect)
-        zone.callback()
-    end)
+    zone.callback()
+    if self._closed then
+        return
+    end
+    self.pressed_zone_id = nil
+    UIManager:setDirty(self, "ui", zone.rect)
 end
 
 function LibraryUI:_px(n)

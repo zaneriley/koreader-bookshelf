@@ -79,19 +79,26 @@ function CatalogSearch:getServer()
     if type(servers) ~= "table" then
         return nil
     end
+    local first
+    local url = self:_dep("url")
     for _, server in ipairs(servers) do
         if type(server.username) == "string" and server.username ~= ""
             and type(server.password) == "string" and server.password ~= ""
             and server.url then
-            return {
+            local candidate = {
                 title = server.title,
                 url = server.url,
                 username = server.username,
                 password = server.password,
             }
+            first = first or candidate
+            local path = (url.parse(server.url) or {}).path or ""
+            if path:match("/opds/?$") then
+                return candidate
+            end
         end
     end
-    return nil
+    return first
 end
 
 function CatalogSearch:_withTimeout(block_timeout, total_timeout, fn)

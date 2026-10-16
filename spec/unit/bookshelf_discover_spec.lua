@@ -145,59 +145,67 @@ describe("Bookshelf discover", function()
         assert.equals("nav_discover", ShelfDetailUI.active_nav_tab)
 
         local UIManager = require("ui/uimanager")
-        local dirty = 0
+        local Geom = require("ui/geometry")
+        local dirty = {}
         local old_set_dirty = UIManager.setDirty
         finally(function()
             UIManager.setDirty = old_set_dirty
         end)
-        UIManager.setDirty = function()
-            dirty = dirty + 1
+        UIManager.setDirty = function(_, _widget, _refresh_type, rect)
+            table.insert(dirty, rect)
         end
 
+        local stack_rect = Geom:new{ x = 0, y = 200, w = 1404, h = 1500 }
         local fake = setmetatable({
             _page = 1,
             _pages = 2,
             rail_regions = {},
             dimen = {},
+            _detail_stack_rect = stack_rect,
         }, { __index = ShelfDetailUI })
 
         assert.is_true(ShelfDetailUI.onSwipe(fake, nil, { direction = "north" }))
         assert.equals(2, fake._page)
-        assert.equals(1, dirty)
+        assert.equals(stack_rect, dirty[1])
         -- clamped at the last page
         assert.is_true(ShelfDetailUI.onSwipe(fake, nil, { direction = "north" }))
         assert.equals(2, fake._page)
-        assert.equals(1, dirty)
+        assert.equals(1, #dirty)
     end)
 
     it("pages the rail stack with vertical swipes and clamps at the edges", function()
         local UIManager = require("ui/uimanager")
-        local dirty = 0
+        local Geom = require("ui/geometry")
+        local dirty = {}
         local old_set_dirty = UIManager.setDirty
         finally(function()
             UIManager.setDirty = old_set_dirty
         end)
-        UIManager.setDirty = function()
-            dirty = dirty + 1
+        UIManager.setDirty = function(_, _widget, _refresh_type, rect)
+            table.insert(dirty, rect)
         end
 
+        local stack_rect = Geom:new{ x = 0, y = 240, w = 1404, h = 1420 }
         local fake = setmetatable({
             _rail_stack_page = 1,
             _rail_stack_pages = 3,
             rail_regions = {},
             dimen = {},
+            _rail_stack_rect = stack_rect,
         }, { __index = DiscoverUI })
 
         assert.is_true(DiscoverUI.onSwipe(fake, nil, { direction = "north" }))
         assert.equals(2, fake._rail_stack_page)
         assert.is_true(DiscoverUI.onSwipe(fake, nil, { direction = "south" }))
         assert.equals(1, fake._rail_stack_page)
-        local repaints = dirty
+        local repaints = #dirty
         assert.equals(2, repaints)
+        assert.equals(stack_rect, dirty[1])
+        assert.equals(stack_rect, dirty[2])
         -- clamped at the first page: consumed, no repaint
         assert.is_true(DiscoverUI.onSwipe(fake, nil, { direction = "south" }))
         assert.equals(1, fake._rail_stack_page)
-        assert.equals(repaints, dirty)
+        assert.equals(repaints, #dirty)
         -- horizontal swipes still fall through to the carousel handler
         assert.is_false(DiscoverUI.onSwipe(fake, nil, { direction = "west", pos = nil }))
     end)
@@ -250,6 +258,50 @@ describe("Bookshelf discover", function()
         local bare = { catalog_id = "/opds/cover/307" }
         assert.is_nil(DiscoverUI._cachedCoverFor(fake, bare, 100, 150))
         assert.is_false(fake.cover_cache["catalog:/opds/cover/307|100x150"])
+    end)
+
+    it("repaints only filled thumbnail regions after a drain batch", function()
+        local Geom = require("ui/geometry")
+        local UIManager = require("ui/uimanager")
+        local old_schedule_in = UIManager.scheduleIn
+        local old_set_dirty = UIManager.setDirty
+        finally(function()
+            UIManager.scheduleIn = old_schedule_in
+            UIManager.setDirty = old_set_dirty
+        end)
+
+        UIManager.scheduleIn = function(_, _delay, fn)
+            fn()
+        end
+
+        local dirty
+        UIManager.setDirty = function(_, _widget, _refresh_type, rect)
+            dirty = rect
+        end
+
+        local first_rect = Geom:new{ x = 10, y = 20, w = 40, h = 60 }
+        local third_rect = Geom:new{ x = 80, y = 90, w = 30, h = 50 }
+        local fake = setmetatable({
+            _thumb_queue = {
+                { key = "first" },
+                { key = "second" },
+                { key = "third" },
+            },
+            _thumb_inflight = {},
+            _thumb_regions = {
+                first = first_rect,
+                third = third_rect,
+            },
+            dimen = Geom:new{ x = 0, y = 0, w = 1404, h = 1872 },
+            _fillThumb = function(_, job)
+                return job.key ~= "second"
+            end,
+        }, { __index = DiscoverUI })
+
+        DiscoverUI._drainThumbQueue(fake)
+
+        assert.equals(first_rect:combine(third_rect), dirty)
+        assert.not_equals(fake.dimen, dirty)
     end)
 
     it("round-trips the download map and snapshot through plugin settings", function()

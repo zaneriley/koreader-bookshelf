@@ -233,8 +233,16 @@ function Bookshelf:onReaderReady()
     if type(preset_id) ~= "string" or preset_id == "" then
         return
     end
+    -- first open only: re-applying on every open re-lays out the book and
+    -- overwrites font changes the reader made since
+    local doc_settings = self.ui.doc_settings
+    if doc_settings and doc_settings:isTrue("bookshelf_reading_preset_applied") then
+        return
+    end
     UIManager:nextTick(function()
-        self:_applyReadingPreset(preset_id)
+        if self:_applyReadingPreset(preset_id) and doc_settings then
+            doc_settings:makeTrue("bookshelf_reading_preset_applied")
+        end
     end)
 end
 
